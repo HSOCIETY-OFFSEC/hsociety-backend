@@ -27,12 +27,39 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const API_PREFIX = '/api';  // Frontend expects /api (see VITE_API_BASE_URL)
 
+const parseAllowedOrigins = () => {
+  const fromList = (process.env.FRONTEND_URLS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+
+  const fromSingle = process.env.FRONTEND_URL ? [process.env.FRONTEND_URL.trim()] : [];
+
+  const defaults = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+
+  return [...new Set([...fromList, ...fromSingle, ...defaults])];
+};
+
+const allowedOrigins = parseAllowedOrigins();
+
 // ============================================
 // Middleware
 // ============================================
 
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true }));
+app.use(cors({
+  origin(origin, callback) {
+    // Allow non-browser requests (e.g. health checks, curl, server-to-server).
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true
+}));
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

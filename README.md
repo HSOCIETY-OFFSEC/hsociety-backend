@@ -25,6 +25,11 @@ Server runs at `http://localhost:3000`. API base: `http://localhost:3000/api`.
 npm start
 ```
 
+Set CORS origins with:
+
+- `FRONTEND_URL` for a single frontend origin
+- `FRONTEND_URLS` for comma-separated multiple origins (recommended for Netlify/Vercel + custom domain)
+
 ## API Structure
 
 Routes match the frontend `API_ENDPOINTS` in `src/config/api.config.js`:
