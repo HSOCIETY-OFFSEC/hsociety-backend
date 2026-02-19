@@ -9,7 +9,14 @@ const feedbackSchema = new mongoose.Schema(
     email: { type: String },
     subject: { type: String, default: '' },
     message: { type: String, required: true },
+    type: { type: String, default: 'general' },
+    priority: { type: String, default: 'normal' },
     category: { type: String, default: 'general' },
+    contact: {
+      name: { type: String, default: '' },
+      email: { type: String, default: '' },
+      allowContact: { type: Boolean, default: false },
+    },
     status: {
       type: String,
       enum: ['open', 'in-progress', 'resolved', 'closed'],
