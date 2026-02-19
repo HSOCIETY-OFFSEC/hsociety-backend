@@ -14,11 +14,12 @@ const JWT_2FA_EXPIRY = process.env.JWT_2FA_EXPIRY || '5m';
 
 /**
  * Map frontend role to backend User.role
- * corporate -> analyst; student -> student
+ * corporate -> pentester; student -> student
  */
 function mapRole(frontendRole) {
   if (frontendRole === 'student') return 'student';
-  if (frontendRole === 'corporate') return 'analyst';
+  if (frontendRole === 'corporate') return 'pentester';
+  if (frontendRole === 'pentester') return 'pentester';
   return 'student';
 }
 
@@ -70,6 +71,7 @@ export function toUserResponse(doc) {
     email: doc.email,
     name: doc.name || '',
     role: doc.role,
+    organization: doc.organization || '',
     twoFactorEnabled: !!doc.twoFactorEnabled,
   };
 }
@@ -93,6 +95,7 @@ export async function register(payload) {
     throw err;
   }
   const name = profile?.fullName ? String(profile.fullName).trim() : '';
+  const organization = profile?.organization ? String(profile.organization).trim() : '';
   const role = mapRole(frontendRole);
 
   const existing = await User.findOne({ email });
@@ -107,6 +110,7 @@ export async function register(payload) {
     email,
     passwordHash,
     name,
+    organization,
     role,
   });
 

@@ -22,6 +22,9 @@ import feedbackRoutes from './routes/feedback.routes.js';
 import communityRoutes from './routes/community.routes.js';
 import studentRoutes from './routes/student.routes.js';
 import profileRoutes from './routes/profile.routes.js';
+import adminRoutes from './routes/admin.routes.js';
+import User from './models/User.js';
+import bcrypt from 'bcryptjs';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -90,6 +93,7 @@ app.use(`${API_PREFIX}/feedback`, feedbackRoutes);
 app.use(`${API_PREFIX}/community`, communityRoutes);
 app.use(`${API_PREFIX}/student`, studentRoutes);
 app.use(`${API_PREFIX}/profile`, profileRoutes);
+app.use(`${API_PREFIX}/admin`, adminRoutes);
 
 // ============================================
 // 404 Handler
@@ -117,6 +121,29 @@ app.use((err, _req, res, _next) => {
 async function start() {
   try {
     await connectDB();
+
+    // Seed admin from ENV if not present
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const adminPassword = process.env.ADMIN_PASSWORD || '';
+    const adminName = process.env.ADMIN_NAME || 'Admin';
+    const adminOrganization = process.env.ADMIN_ORG || '';
+
+    if (adminEmail && adminPassword) {
+      const existingAdmin = await User.findOne({ role: 'admin' }).lean();
+      if (!existingAdmin) {
+        const passwordHash = await bcrypt.hash(adminPassword, 10);
+        await User.create({
+          email: adminEmail,
+          passwordHash,
+          name: adminName,
+          organization: adminOrganization,
+          role: 'admin',
+          emailVerified: true,
+        });
+        console.log(`[HSOCIETY] Seeded admin user: ${adminEmail}`);
+      }
+    }
+
     app.listen(PORT, () => {
       console.log(`[HSOCIETY] API server running at http://localhost:${PORT}${API_PREFIX}`);
     });

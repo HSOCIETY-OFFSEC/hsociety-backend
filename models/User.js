@@ -24,8 +24,13 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['student', 'analyst', 'admin'],
+      enum: ['student', 'pentester', 'admin'],
       default: 'student',
+    },
+    organization: {
+      type: String,
+      trim: true,
+      default: '',
     },
     emailVerified: {
       type: Boolean,

@@ -49,6 +49,9 @@ router.get('/', async (_req, res, next) => {
 // POST /audits
 router.post('/', async (req, res, next) => {
   try {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     const payload = ensureAuditDefaults(req.body || {});
     const doc = await Audit.create({
       ...payload,
@@ -84,6 +87,9 @@ router.get('/:id', async (req, res, next) => {
 // PUT /audits/:id
 router.put('/:id', async (req, res, next) => {
   try {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     const payload = ensureAuditDefaults(req.body || {});
     const doc = await Audit.findByIdAndUpdate(
       req.params.id,
@@ -100,6 +106,9 @@ router.put('/:id', async (req, res, next) => {
 // DELETE /audits/:id
 router.delete('/:id', async (req, res, next) => {
   try {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     const result = await Audit.findByIdAndDelete(req.params.id);
     if (!result) return res.status(404).json({ error: 'Not found' });
     res.status(204).send();

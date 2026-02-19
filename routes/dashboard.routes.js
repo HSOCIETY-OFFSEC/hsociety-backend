@@ -60,7 +60,8 @@ router.get('/stats', async (_req, res, next) => {
 router.get('/activity', async (req, res, next) => {
   try {
     const limit = Math.max(1, Math.min(50, Number(req.query.limit || 10)));
-    const items = await DashboardActivity.find({ userId: req.user.id })
+    const query = req.user.role === 'admin' ? {} : { userId: req.user.id };
+    const items = await DashboardActivity.find(query)
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();
@@ -73,13 +74,14 @@ router.get('/activity', async (req, res, next) => {
 // GET /dashboard/overview
 router.get('/overview', async (req, res, next) => {
   try {
+    const activityQuery = req.user.role === 'admin' ? {} : { userId: req.user.id };
     const [activePentests, completedAudits, pendingReports, audits, activityItems, latestAudit] =
       await Promise.all([
         Pentest.countDocuments({ status: { $in: ['pending', 'in-progress'] } }),
         Audit.countDocuments({ status: 'completed' }),
         Audit.countDocuments({ reportAvailable: false }),
         Audit.find().select('severity remediationProgress').lean(),
-        DashboardActivity.find({ userId: req.user.id })
+        DashboardActivity.find(activityQuery)
           .sort({ createdAt: -1 })
           .limit(10)
           .lean(),

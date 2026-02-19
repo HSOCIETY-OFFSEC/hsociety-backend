@@ -50,6 +50,19 @@ export async function requireAuth(req, res, next) {
 }
 
 /**
+ * Require admin role
+ */
+export function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  return next();
+}
+
+/**
  * Optional auth: set req.user if valid token present, otherwise leave req.user undefined.
  */
 export async function optionalAuth(req, res, next) {
@@ -76,4 +89,4 @@ export async function optionalAuth(req, res, next) {
   next();
 }
 
-export default { requireAuth, optionalAuth };
+export default { requireAuth, optionalAuth, requireAdmin };
