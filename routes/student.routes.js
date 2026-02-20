@@ -8,6 +8,8 @@ import {
   QuizSubmission,
   StudentCourse,
   StudentProfile,
+  CommunityConfig,
+  User,
 } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 
@@ -228,10 +230,20 @@ router.get('/overview', async (req, res, next) => {
     const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
     const progressState = getProgressState(profile?.snapshot);
     const overview = buildOverviewFromCourse(course.course || course, progressState);
+    const communityConfig = await CommunityConfig.findOne().select('stats channels').lean();
+    const stats = communityConfig?.stats || {};
+    const channels = communityConfig?.channels || [];
+    const user = await User.findById(req.user.id).select('bootcampStatus').lean();
     res.json({
       learningPath: overview.learningPath || [],
       modules: overview.modules || [],
       snapshot: overview.snapshot || [],
+      bootcampStatus: user?.bootcampStatus || 'not_enrolled',
+      communityStats: {
+        questions: Number(stats.questions || 0),
+        answered: Number(stats.answered || 0),
+        channels: Number(channels.length || 0),
+      },
     });
   } catch (err) {
     next(err);
@@ -257,6 +269,43 @@ router.get('/snapshot', async (req, res, next) => {
     const progressState = getProgressState(profile?.snapshot);
     const overview = buildOverviewFromCourse(course.course || course, progressState);
     res.json(overview.snapshot || []);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/bootcamp
+router.post('/bootcamp', async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.bootcampStatus !== 'completed') {
+      user.bootcampStatus = 'enrolled';
+      await user.save({ validateBeforeSave: false });
+    }
+
+    const application = req.body?.application && typeof req.body.application === 'object'
+      ? req.body.application
+      : null;
+
+    if (application) {
+      const profile = await StudentProfile.findOne({ userId: req.user.id });
+      const snapshot = profile?.snapshot || {};
+      const updatedSnapshot = {
+        ...snapshot,
+        bootcampApplication: {
+          ...application,
+          submittedAt: new Date().toISOString(),
+        },
+      };
+      await StudentProfile.findOneAndUpdate(
+        { userId: req.user.id },
+        { $set: { snapshot: updatedSnapshot } },
+        { upsert: true, new: true }
+      );
+    }
+
+    res.json({ bootcampStatus: user.bootcampStatus || 'enrolled' });
   } catch (err) {
     next(err);
   }

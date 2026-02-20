@@ -21,6 +21,7 @@ router.get('/', async (req, res, next) => {
       name: user.name || '',
       organization: user.organization || '',
       avatarUrl: user.avatarUrl || '',
+      bootcampStatus: user.bootcampStatus || 'not_enrolled',
       role: user.role,
     });
   } catch (err) {
@@ -45,6 +46,7 @@ router.put('/', async (req, res, next) => {
       name: user.name || '',
       organization: user.organization || '',
       avatarUrl: user.avatarUrl || '',
+      bootcampStatus: user.bootcampStatus || 'not_enrolled',
       role: user.role,
     });
   } catch (err) {
@@ -74,6 +76,7 @@ router.put('/avatar', async (req, res, next) => {
       name: user.name || '',
       organization: user.organization || '',
       avatarUrl: user.avatarUrl || '',
+      bootcampStatus: user.bootcampStatus || 'not_enrolled',
       role: user.role,
     });
   } catch (err) {

@@ -16,6 +16,7 @@ const toUserResponse = (user) => ({
   email: user.email,
   role: user.role,
   organization: user.organization || '',
+  bootcampStatus: user.bootcampStatus || 'not_enrolled',
   createdAt: user.createdAt,
 });
 
@@ -40,6 +41,12 @@ router.patch('/users/:id', async (req, res, next) => {
     }
     if (req.body?.role && ['student', 'pentester', 'admin'].includes(req.body.role)) {
       updates.role = req.body.role;
+    }
+    if (
+      req.body?.bootcampStatus &&
+      ['not_enrolled', 'enrolled', 'completed'].includes(req.body.bootcampStatus)
+    ) {
+      updates.bootcampStatus = req.body.bootcampStatus;
     }
 
     const user = await User.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true }).lean();

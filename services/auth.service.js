@@ -73,6 +73,7 @@ export function toUserResponse(doc) {
     role: doc.role,
     organization: doc.organization || '',
     avatarUrl: doc.avatarUrl || '',
+    bootcampStatus: doc.bootcampStatus || 'not_enrolled',
     twoFactorEnabled: !!doc.twoFactorEnabled,
   };
 }

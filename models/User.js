@@ -36,6 +36,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    bootcampStatus: {
+      type: String,
+      enum: ['not_enrolled', 'enrolled', 'completed'],
+      default: 'not_enrolled',
+    },
     emailVerified: {
       type: Boolean,
       default: false,
