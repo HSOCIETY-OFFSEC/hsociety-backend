@@ -23,6 +23,7 @@ import communityRoutes from './routes/community.routes.js';
 import studentRoutes from './routes/student.routes.js';
 import profileRoutes from './routes/profile.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import publicRoutes from './routes/public.routes.js';
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
 
@@ -94,6 +95,7 @@ app.use(`${API_PREFIX}/community`, communityRoutes);
 app.use(`${API_PREFIX}/student`, studentRoutes);
 app.use(`${API_PREFIX}/profile`, profileRoutes);
 app.use(`${API_PREFIX}/admin`, adminRoutes);
+app.use(`${API_PREFIX}/public`, publicRoutes);
 
 // ============================================
 // 404 Handler

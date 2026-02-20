@@ -72,6 +72,7 @@ export function toUserResponse(doc) {
     name: doc.name || '',
     role: doc.role,
     organization: doc.organization || '',
+    avatarUrl: doc.avatarUrl || '',
     twoFactorEnabled: !!doc.twoFactorEnabled,
   };
 }

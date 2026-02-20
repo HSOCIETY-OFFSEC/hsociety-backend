@@ -7,35 +7,13 @@ import {
   Quiz,
   QuizSubmission,
   StudentCourse,
-  StudentOverview,
   StudentProfile,
 } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
-const DEFAULT_OVERVIEW = {
-  learningPath: [
-    { id: 'net', title: 'Networking Basics', status: 'done', progress: 100 },
-    { id: 'linux', title: 'Linux Essentials', status: 'in-progress', progress: 65 },
-    { id: 'web', title: 'Web Security', status: 'next', progress: 0 },
-  ],
-  challenges: [
-    { id: 'sql', title: 'SQL Injection 101', level: 'Easy', time: '35 min', icon: 'target' },
-    { id: 'jwt', title: 'JWT Misconfig', level: 'Medium', time: '50 min', icon: 'shield' },
-    { id: 'phish', title: 'Phishing Analysis', level: 'Easy', time: '25 min', icon: 'flag' },
-  ],
-  mentors: [
-    { id: 'nia', name: 'Nia T.', focus: 'Blue Team', status: 'Available' },
-    { id: 'sam', name: 'Sam K.', focus: 'Web Pentest', status: 'Busy' },
-  ],
-  snapshot: [
-    { id: 'lessons', label: 'Lessons completed', value: '18', icon: 'check' },
-    { id: 'time', label: 'Time spent', value: '12h', icon: 'clock' },
-    { id: 'labs', label: 'Labs passed', value: '7', icon: 'lock' },
-    { id: 'ctfs', label: 'CTFs completed', value: '3', icon: 'code' },
-  ],
-};
+const emptyProgressState = { modules: {} };
 
 const DEFAULT_COURSE = {
   course: {
@@ -138,15 +116,6 @@ const buildDefaultQuiz = ({ type, id, courseId }) => ({
 
 router.use(requireAuth);
 
-const ensureOverview = async (userId) => {
-  let overview = await StudentOverview.findOne({ userId }).lean();
-  if (!overview) {
-    const created = await StudentOverview.create({ userId, ...DEFAULT_OVERVIEW });
-    overview = created.toObject();
-  }
-  return overview;
-};
-
 const ensureCourse = async () => {
   let course = await StudentCourse.findOne().lean();
   if (!course) {
@@ -156,14 +125,112 @@ const ensureCourse = async () => {
   return course;
 };
 
+const getProgressState = (profileSnapshot) => {
+  const progress = profileSnapshot?.progressState;
+  if (progress && typeof progress === 'object') return progress;
+  return emptyProgressState;
+};
+
+const computeModuleProgress = (module, progressState) => {
+  const moduleProgress = progressState.modules?.[module.moduleId] || { rooms: {}, ctfCompleted: false };
+  const totalRooms = module.rooms.length;
+  const roomsCompleted = module.rooms.filter((room) => moduleProgress.rooms?.[room.roomId]).length;
+  const ctfCompleted = Boolean(moduleProgress.ctfCompleted);
+  const totalUnits = totalRooms + 1;
+  const completedUnits = roomsCompleted + (ctfCompleted ? 1 : 0);
+  const progress = totalUnits ? Math.round((completedUnits / totalUnits) * 100) : 0;
+
+  return {
+    roomsCompleted,
+    totalRooms,
+    ctfCompleted,
+    progress,
+  };
+};
+
+const computeModuleStatuses = (modules, progressState) => {
+  let firstIncompleteIndex = modules.length - 1;
+  for (let i = 0; i < modules.length; i += 1) {
+    const module = modules[i];
+    const stats = computeModuleProgress(module, progressState);
+    if (!(stats.roomsCompleted === stats.totalRooms && stats.ctfCompleted)) {
+      firstIncompleteIndex = i;
+      break;
+    }
+  }
+
+  return modules.map((module, index) => {
+    const stats = computeModuleProgress(module, progressState);
+    if (stats.roomsCompleted === stats.totalRooms && stats.ctfCompleted) return 'done';
+    if (index === firstIncompleteIndex) {
+      return stats.progress > 0 ? 'in-progress' : 'next';
+    }
+    return 'next';
+  });
+};
+
+const buildOverviewFromCourse = (course, progressState) => {
+  const modules = course.modules || [];
+  const statuses = computeModuleStatuses(modules, progressState);
+  let totalRooms = 0;
+  let roomsCompleted = 0;
+  let ctfsCompleted = 0;
+
+  const learningPath = modules.map((module, index) => {
+    const stats = computeModuleProgress(module, progressState);
+    totalRooms += stats.totalRooms;
+    roomsCompleted += stats.roomsCompleted;
+    if (stats.ctfCompleted) ctfsCompleted += 1;
+
+    return {
+      id: module.moduleId,
+      title: module.title,
+      status: statuses[index],
+      progress: stats.progress,
+      roomsTotal: stats.totalRooms,
+      roomsCompleted: stats.roomsCompleted,
+    };
+  });
+
+  const totalModules = modules.length;
+  const modulesCompleted = learningPath.filter((item) => item.status === 'done').length;
+  const totalUnits = totalRooms + totalModules; // rooms + CTFs
+  const completedUnits = roomsCompleted + ctfsCompleted;
+  const overallProgress = totalUnits ? Math.round((completedUnits / totalUnits) * 100) : 0;
+
+  return {
+    learningPath,
+    modules: modules.map((module) => {
+      const stats = computeModuleProgress(module, progressState);
+      return {
+        id: module.moduleId,
+        title: module.title,
+        roomsTotal: stats.totalRooms,
+        roomsCompleted: stats.roomsCompleted,
+        ctf: module.ctf,
+        badge: module.badge,
+        progress: stats.progress,
+      };
+    }),
+    snapshot: [
+      { id: 'modules', label: 'Modules completed', value: String(modulesCompleted), icon: 'check' },
+      { id: 'rooms', label: 'Rooms completed', value: String(roomsCompleted), icon: 'code' },
+      { id: 'ctfs', label: 'CTFs completed', value: String(ctfsCompleted), icon: 'flag' },
+      { id: 'progress', label: 'Overall progress', value: `${overallProgress}%`, icon: 'clock' },
+    ],
+  };
+};
+
 // GET /student/overview
 router.get('/overview', async (req, res, next) => {
   try {
-    const overview = await ensureOverview(req.user.id);
+    const course = await ensureCourse();
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const progressState = getProgressState(profile?.snapshot);
+    const overview = buildOverviewFromCourse(course.course || course, progressState);
     res.json({
       learningPath: overview.learningPath || [],
-      challenges: overview.challenges || [],
-      mentors: overview.mentors || [],
+      modules: overview.modules || [],
       snapshot: overview.snapshot || [],
     });
   } catch (err) {
@@ -173,26 +240,11 @@ router.get('/overview', async (req, res, next) => {
 
 router.get('/learning-path', async (req, res, next) => {
   try {
-    const overview = await ensureOverview(req.user.id);
+    const course = await ensureCourse();
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const progressState = getProgressState(profile?.snapshot);
+    const overview = buildOverviewFromCourse(course.course || course, progressState);
     res.json(overview.learningPath || []);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get('/challenges', async (req, res, next) => {
-  try {
-    const overview = await ensureOverview(req.user.id);
-    res.json(overview.challenges || []);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get('/mentors', async (req, res, next) => {
-  try {
-    const overview = await ensureOverview(req.user.id);
-    res.json(overview.mentors || []);
   } catch (err) {
     next(err);
   }
@@ -200,7 +252,10 @@ router.get('/mentors', async (req, res, next) => {
 
 router.get('/snapshot', async (req, res, next) => {
   try {
-    const overview = await ensureOverview(req.user.id);
+    const course = await ensureCourse();
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const progressState = getProgressState(profile?.snapshot);
+    const overview = buildOverviewFromCourse(course.course || course, progressState);
     res.json(overview.snapshot || []);
   } catch (err) {
     next(err);

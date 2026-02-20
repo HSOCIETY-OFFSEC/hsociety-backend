@@ -45,6 +45,7 @@ export async function requireAuth(req, res, next) {
     email: user.email,
     name: user.name || '',
     role: user.role,
+    avatarUrl: user.avatarUrl || '',
   };
   next();
 }
@@ -81,6 +82,7 @@ export async function optionalAuth(req, res, next) {
         email: user.email,
         name: user.name || '',
         role: user.role,
+        avatarUrl: user.avatarUrl || '',
       };
     }
   } catch {
