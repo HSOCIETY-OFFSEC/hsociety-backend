@@ -3,7 +3,7 @@
  * Matches frontend API_ENDPOINTS.COMMUNITY
  */
 import { Router } from 'express';
-import { CommunityConfig, CommunityPost } from '../models/index.js';
+import { CommunityConfig, CommunityMessage, CommunityPost } from '../models/index.js';
 import { optionalAuth, requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
@@ -190,6 +190,34 @@ router.post('/posts/:id/save', requireAuth, async (req, res, next) => {
 
     await post.save();
     res.json({ success: true, saved: shouldSave });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /community/messages?room=general&limit=50
+router.get('/messages', requireAuth, async (req, res, next) => {
+  try {
+    const room = String(req.query.room || 'general').trim();
+    const limitRaw = Number(req.query.limit || 50);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 50;
+
+    const messages = await CommunityMessage.find({ room })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json({
+      room,
+      messages: messages.map((message) => ({
+        id: message._id.toString(),
+        userId: message.userId?.toString() || '',
+        username: message.username,
+        room: message.room,
+        content: message.content,
+        createdAt: message.createdAt
+      }))
+    });
   } catch (err) {
     next(err);
   }

@@ -11,9 +11,12 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 
 import mongoose from 'mongoose';
 import { connectDB } from './db/index.js';
+import registerCommunitySocket from './sockets/community.socket.js';
 import authRoutes from './routes/auth.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import pentestRoutes from './routes/pentest.routes.js';
@@ -45,6 +48,15 @@ const parseAllowedOrigins = () => {
 };
 
 const allowedOrigins = parseAllowedOrigins();
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: allowedOrigins,
+    credentials: true
+  }
+});
+
+registerCommunitySocket(io);
 
 // ============================================
 // Middleware
@@ -146,7 +158,7 @@ async function start() {
       }
     }
 
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.log(`[HSOCIETY] API server running at http://localhost:${PORT}${API_PREFIX}`);
     });
   } catch (err) {
