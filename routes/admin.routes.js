@@ -4,6 +4,12 @@
 import { Router } from 'express';
 import { Audit, Feedback, Pentest, User } from '../models/index.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
+import {
+  approvePaidPentest,
+  assignEngagement,
+  getAnalytics,
+  publishCaseStudy,
+} from '../services/admin.service.js';
 
 const router = Router();
 
@@ -39,7 +45,7 @@ router.patch('/users/:id', async (req, res, next) => {
     if (typeof req.body?.organization === 'string') {
       updates.organization = req.body.organization.trim();
     }
-    if (req.body?.role && ['student', 'pentester', 'admin'].includes(req.body.role)) {
+    if (req.body?.role && ['student', 'pentester', 'corporate', 'admin'].includes(req.body.role)) {
       updates.role = req.body.role;
     }
     if (
@@ -89,6 +95,28 @@ router.patch('/pentests/:id', async (req, res, next) => {
   }
 });
 
+// PATCH /admin/pentests/:id/assign
+router.patch('/pentests/:id/assign', async (req, res, next) => {
+  try {
+    const doc = await assignEngagement(req.params.id, req.body?.assignedTo || null);
+    if (!doc) return res.status(404).json({ error: 'Pentest not found' });
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /admin/pentests/:id/approve-payment
+router.post('/pentests/:id/approve-payment', async (req, res, next) => {
+  try {
+    const doc = await approvePaidPentest(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Pentest not found' });
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PATCH /admin/audits/:id
 router.patch('/audits/:id', async (req, res, next) => {
   try {
@@ -124,6 +152,27 @@ router.patch('/feedback/:id', async (req, res, next) => {
     ).lean();
     if (!doc) return res.status(404).json({ error: 'Feedback not found' });
     res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /admin/case-studies
+router.post('/case-studies', async (req, res, next) => {
+  try {
+    if (!req.body?.title) return res.status(400).json({ error: 'Title is required' });
+    const doc = await publishCaseStudy(req.user.id, req.body || {});
+    res.status(201).json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /admin/analytics
+router.get('/analytics', async (_req, res, next) => {
+  try {
+    const data = await getAnalytics();
+    res.json(data);
   } catch (err) {
     next(err);
   }

@@ -50,6 +50,10 @@ router.get('/stats', async (_req, res, next) => {
       pendingReports,
       vulnerabilitiesFound,
       remediationRate,
+      // Frontend contract compatibility
+      activeEngagements: activePentests,
+      completedEngagements: completedAudits,
+      remediationProgress: remediationRate,
     });
   } catch (err) {
     next(err);
@@ -102,6 +106,10 @@ router.get('/overview', async (req, res, next) => {
       pendingReports,
       vulnerabilitiesFound,
       remediationRate,
+      // Frontend contract compatibility
+      activeEngagements: activePentests,
+      completedEngagements: completedAudits,
+      remediationProgress: remediationRate,
     };
 
     const quickStats = {

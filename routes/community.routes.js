@@ -122,6 +122,17 @@ router.get('/posts', optionalAuth, async (req, res, next) => {
   }
 });
 
+// GET /community/posts/:id
+router.get('/posts/:id', optionalAuth, async (req, res, next) => {
+  try {
+    const post = await CommunityPost.findById(req.params.id).lean();
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    res.json(toPostResponse(post, req.user?.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /community/posts
 router.post('/posts', requireAuth, async (req, res, next) => {
   try {
@@ -215,9 +226,39 @@ router.get('/messages', requireAuth, async (req, res, next) => {
         username: message.username,
         room: message.room,
         content: message.content,
+        imageUrl: message.imageUrl || '',
+        likes: Number(message.likes || 0),
+        likedBy: (message.likedBy || []).map((id) => id.toString()),
+        comments: (message.comments || []).map((comment) => ({
+          id: comment._id?.toString() || '',
+          userId: comment.userId?.toString() || '',
+          username: comment.username || 'Community Member',
+          content: comment.content || '',
+          createdAt: comment.createdAt
+        })),
         createdAt: message.createdAt
       }))
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /community/channels
+router.get('/channels', optionalAuth, async (_req, res, next) => {
+  try {
+    const config = await ensureConfig();
+    res.json(config.channels?.length ? config.channels : DEFAULT_CHANNELS);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /community/tags
+router.get('/tags', optionalAuth, async (_req, res, next) => {
+  try {
+    const config = await ensureConfig();
+    res.json(config.tags?.length ? config.tags : DEFAULT_TAGS);
   } catch (err) {
     next(err);
   }

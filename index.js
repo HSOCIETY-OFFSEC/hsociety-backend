@@ -27,6 +27,12 @@ import studentRoutes from './routes/student.routes.js';
 import profileRoutes from './routes/profile.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import publicRoutes from './routes/public.routes.js';
+import engagementsRoutes from './routes/engagements.routes.js';
+import reportsRoutes from './routes/reports.routes.js';
+import remediationRoutes from './routes/remediation.routes.js';
+import assetsRoutes from './routes/assets.routes.js';
+import billingRoutes from './routes/billing.routes.js';
+import notificationsRoutes from './routes/notifications.routes.js';
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
 
@@ -108,6 +114,12 @@ app.use(`${API_PREFIX}/student`, studentRoutes);
 app.use(`${API_PREFIX}/profile`, profileRoutes);
 app.use(`${API_PREFIX}/admin`, adminRoutes);
 app.use(`${API_PREFIX}/public`, publicRoutes);
+app.use(`${API_PREFIX}/engagements`, engagementsRoutes);
+app.use(`${API_PREFIX}/reports`, reportsRoutes);
+app.use(`${API_PREFIX}/remediation`, remediationRoutes);
+app.use(`${API_PREFIX}/assets`, assetsRoutes);
+app.use(`${API_PREFIX}/billing`, billingRoutes);
+app.use(`${API_PREFIX}/notifications`, notificationsRoutes);
 
 // ============================================
 // 404 Handler

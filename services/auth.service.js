@@ -18,7 +18,7 @@ const JWT_2FA_EXPIRY = process.env.JWT_2FA_EXPIRY || '5m';
  */
 function mapRole(frontendRole) {
   if (frontendRole === 'student') return 'student';
-  if (frontendRole === 'corporate') return 'pentester';
+  if (frontendRole === 'corporate' || frontendRole === 'client') return 'corporate';
   if (frontendRole === 'pentester') return 'pentester';
   return 'student';
 }

@@ -14,3 +14,6 @@ export { default as StudentOverview } from './StudentOverview.js';
 export { default as StudentProfile } from './StudentProfile.js';
 export { default as Quiz } from './Quiz.js';
 export { default as QuizSubmission } from './QuizSubmission.js';
+export { default as Asset } from './Asset.js';
+export { default as CaseStudy } from './CaseStudy.js';
+export { default as Notification } from './Notification.js';

@@ -65,6 +65,21 @@ export function requireAdmin(req, res, next) {
 }
 
 /**
+ * Require any one of the provided roles.
+ */
+export function requireRoles(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    return next();
+  };
+}
+
+/**
  * Optional auth: set req.user if valid token present, otherwise leave req.user undefined.
  */
 export async function optionalAuth(req, res, next) {
@@ -93,4 +108,4 @@ export async function optionalAuth(req, res, next) {
   next();
 }
 
-export default { requireAuth, optionalAuth, requireAdmin };
+export default { requireAuth, optionalAuth, requireAdmin, requireRoles };

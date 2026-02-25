@@ -12,6 +12,14 @@ import {
   User,
 } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
+import {
+  completeModule,
+  deployProfessional,
+  enrollTraining,
+  joinCommunity,
+  listSupervisedEngagements,
+  refreshSkills,
+} from '../services/student.lifecycle.service.js';
 
 const router = Router();
 
@@ -117,6 +125,13 @@ const buildDefaultQuiz = ({ type, id, courseId }) => ({
 });
 
 router.use(requireAuth);
+
+router.use((req, res, next) => {
+  if (req.user.role !== 'student' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Student access required' });
+  }
+  return next();
+});
 
 const ensureCourse = async () => {
   let course = await StudentCourse.findOne().lean();
@@ -321,6 +336,32 @@ router.get('/course', async (_req, res, next) => {
   }
 });
 
+// GET /student/courses
+router.get('/courses', async (_req, res, next) => {
+  try {
+    const course = await ensureCourse();
+    res.json([course.course || course]);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /student/course/progress
+router.get('/course/progress', async (req, res, next) => {
+  try {
+    const course = await ensureCourse();
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const progressState = getProgressState(profile?.snapshot);
+    const overview = buildOverviewFromCourse(course.course || course, progressState);
+    res.json({
+      overall: overview.snapshot?.find((item) => item.id === 'progress')?.value || '0%',
+      modules: overview.modules || [],
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /student/profile
 router.post('/profile', async (req, res, next) => {
   try {
@@ -372,6 +413,67 @@ router.post('/quiz', async (req, res, next) => {
     }
 
     return res.status(400).json({ error: 'Invalid quiz payload' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/enroll-training
+router.post('/enroll-training', async (req, res, next) => {
+  try {
+    const training = await enrollTraining(req.user.id, req.body || {});
+    res.json(training);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/modules/:moduleId/complete
+router.post('/modules/:moduleId/complete', async (req, res, next) => {
+  try {
+    const result = await completeModule(req.user.id, req.params.moduleId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/community/join
+router.post('/community/join', async (req, res, next) => {
+  try {
+    const result = await joinCommunity(req.user.id);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /student/engagements/supervised
+router.get('/engagements/supervised', async (req, res, next) => {
+  try {
+    const result = await listSupervisedEngagements(req.user.id);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/skill-refresh
+router.post('/skill-refresh', async (req, res, next) => {
+  try {
+    const result = await refreshSkills(req.user.id, req.body || {});
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/deployment
+router.post('/deployment', async (req, res, next) => {
+  try {
+    const result = await deployProfessional(req.user.id, req.body || {});
+    if (!result) return res.status(404).json({ error: 'User not found' });
+    res.json(result);
   } catch (err) {
     next(err);
   }
