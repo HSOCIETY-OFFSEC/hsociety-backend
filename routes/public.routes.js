@@ -3,7 +3,7 @@
  * No auth required
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, Pentest, User } from '../models/index.js';
+import { Audit, CommunityConfig, Pentest, Subscription, User } from '../models/index.js';
 
 const router = Router();
 
@@ -64,6 +64,45 @@ router.get('/landing-stats', async (_req, res, next) => {
         remediationSuccess,
         countriesSupported: 0,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const normalizeEmail = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+router.post('/subscribe', async (req, res, next) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    const payload = {
+      email,
+      name: typeof req.body?.name === 'string' ? req.body.name.trim() : '',
+      source: req.body?.source || 'landing',
+      metadata: {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'] || '',
+      },
+    };
+
+    const doc = await Subscription.findOneAndUpdate(
+      { email },
+      { $set: payload },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({
+      success: true,
+      message: doc.createdAt?.getTime() === doc.updatedAt?.getTime()
+        ? 'Subscription created'
+        : 'Subscription already active',
     });
   } catch (err) {
     next(err);

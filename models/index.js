@@ -18,3 +18,4 @@ export { default as Asset } from './Asset.js';
 export { default as CaseStudy } from './CaseStudy.js';
 export { default as Notification } from './Notification.js';
 export { default as BootcampPayment } from './BootcampPayment.js';
+export { default as Subscription } from './Subscription.js';

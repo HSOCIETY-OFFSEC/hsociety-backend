@@ -12,6 +12,65 @@ const JWT_ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY || '24h';
 const JWT_REFRESH_EXPIRY = process.env.JWT_REFRESH_EXPIRY || '7d';
 const JWT_2FA_EXPIRY = process.env.JWT_2FA_EXPIRY || '5m';
 
+const DEV_QUICK_USERS = {
+  'test-corp@hsociety.local': {
+    name: 'Test Corporate',
+    role: 'corporate',
+    organization: 'HsOCIETY Labs',
+    bootcampStatus: 'not_enrolled',
+    bootcampPaymentStatus: 'unpaid',
+    password: 'Test123!'
+  },
+  'test-pen@hsociety.local': {
+    name: 'Test Pentester',
+    role: 'pentester',
+    organization: 'HsOCIETY Labs',
+    bootcampStatus: 'not_enrolled',
+    bootcampPaymentStatus: 'unpaid',
+    password: 'Test123!'
+  },
+  'test-stu@hsociety.local': {
+    name: 'Test Student',
+    role: 'student',
+    organization: 'HsOCIETY Labs',
+    bootcampStatus: 'enrolled',
+    bootcampPaymentStatus: 'paid',
+    password: 'Test123!'
+  }
+};
+
+const ENABLE_DEV_QUICK_ACCOUNTS = process.env.ENABLE_DEV_QUICK_ACCOUNTS
+  ? process.env.ENABLE_DEV_QUICK_ACCOUNTS === 'true'
+  : process.env.NODE_ENV !== 'production';
+
+const normalizeEmail = (input) => (typeof input === 'string' ? input.trim().toLowerCase() : '');
+
+const ensureDevQuickAccount = async (email) => {
+  if (!ENABLE_DEV_QUICK_ACCOUNTS) return null;
+  const normalizedEmail = normalizeEmail(email);
+  const entry = DEV_QUICK_USERS[normalizedEmail];
+  if (!entry) return null;
+
+  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
+  if (user) {
+    return user;
+  }
+
+  const passwordHash = await hashPassword(entry.password);
+  user = await User.create({
+    email: normalizedEmail,
+    passwordHash,
+    name: entry.name,
+    organization: entry.organization || '',
+    role: entry.role,
+    bootcampStatus: entry.bootcampStatus,
+    bootcampPaymentStatus: entry.bootcampPaymentStatus,
+  });
+
+  user.passwordHash = passwordHash;
+  return user;
+};
+
 /**
  * Map frontend role to backend User.role
  * corporate -> pentester; student -> student
@@ -136,9 +195,12 @@ export async function login(email, password) {
     err.status = 400;
     throw err;
   }
-  const normalizedEmail = String(email).trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
 
-  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
+  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
+  if (!user) {
+    user = await ensureDevQuickAccount(normalizedEmail);
+  }
   if (!user) {
     const err = new Error('Invalid email or password');
     err.status = 401;
