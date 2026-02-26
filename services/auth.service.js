@@ -74,6 +74,7 @@ export function toUserResponse(doc) {
     organization: doc.organization || '',
     avatarUrl: doc.avatarUrl || '',
     bootcampStatus: doc.bootcampStatus || 'not_enrolled',
+    bootcampPaymentStatus: doc.bootcampPaymentStatus || 'unpaid',
     twoFactorEnabled: !!doc.twoFactorEnabled,
   };
 }

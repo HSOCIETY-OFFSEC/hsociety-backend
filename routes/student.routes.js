@@ -10,6 +10,7 @@ import {
   StudentProfile,
   CommunityConfig,
   User,
+  BootcampPayment,
 } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import {
@@ -133,6 +134,99 @@ router.use((req, res, next) => {
   return next();
 });
 
+const BOOTCAMP_PRICE_GHS = Number(process.env.BOOTCAMP_PRICE_GHS || 150);
+const BOOTCAMP_CURRENCY = process.env.BOOTCAMP_CURRENCY || 'GHS';
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || '';
+
+const getFrontendBaseUrl = () => {
+  const base = process.env.FRONTEND_URL
+    ? process.env.FRONTEND_URL.trim()
+    : (process.env.FRONTEND_URLS || '').split(',').map((item) => item.trim()).filter(Boolean)[0];
+  return base || 'http://localhost:5173';
+};
+
+const buildPaystackCallbackUrl = () => {
+  const base = getFrontendBaseUrl().replace(/\/+$/, '');
+  return `${base}/student-payments`;
+};
+
+const mapPaymentMethodToChannels = (method) => {
+  switch (method) {
+    case 'momo':
+    case 'telcel':
+      return ['mobile_money'];
+    case 'bank':
+      return ['bank_transfer', 'bank'];
+    default:
+      return ['card', 'bank_transfer', 'mobile_money'];
+  }
+};
+
+const requireBootcampRegistration = async (req, res, next) => {
+  if (req.user.role === 'admin') return next();
+  const user = await User.findById(req.user.id).select('bootcampStatus bootcampPaymentStatus').lean();
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  if (user.bootcampStatus === 'not_enrolled') {
+    return res.status(403).json({ error: 'Bootcamp registration required', code: 'bootcamp_registration_required' });
+  }
+  req.bootcampAccess = {
+    registered: true,
+    paid: user.bootcampPaymentStatus === 'paid',
+  };
+  return next();
+};
+
+const requireBootcampAccess = async (req, res, next) => {
+  if (req.user.role === 'admin') return next();
+  const user = await User.findById(req.user.id).select('bootcampStatus bootcampPaymentStatus').lean();
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  if (user.bootcampStatus === 'not_enrolled') {
+    return res.status(403).json({ error: 'Bootcamp registration required', code: 'bootcamp_registration_required' });
+  }
+  if (user.bootcampPaymentStatus !== 'paid') {
+    return res.status(403).json({ error: 'Bootcamp payment required', code: 'bootcamp_payment_required' });
+  }
+  return next();
+};
+
+const initializePaystackTransaction = async ({ email, amount, reference, channels, metadata }) => {
+  if (!PAYSTACK_SECRET_KEY) {
+    const err = new Error('Paystack secret key missing');
+    err.status = 500;
+    throw err;
+  }
+
+  const payload = {
+    email,
+    amount: Math.round(Number(amount) * 100),
+    currency: BOOTCAMP_CURRENCY,
+    reference,
+    channels,
+    callback_url: buildPaystackCallbackUrl(),
+    metadata: metadata || {},
+  };
+
+  const response = await fetch('https://api.paystack.co/transaction/initialize', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok || !data.status) {
+    const err = new Error(data?.message || 'Paystack initialization failed');
+    err.status = response.status || 500;
+    throw err;
+  }
+
+  return data.data;
+};
+
 const ensureCourse = async () => {
   let course = await StudentCourse.findOne().lean();
   if (!course) {
@@ -241,19 +335,25 @@ const buildOverviewFromCourse = (course, progressState) => {
 // GET /student/overview
 router.get('/overview', async (req, res, next) => {
   try {
-    const course = await ensureCourse();
-    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
-    const progressState = getProgressState(profile?.snapshot);
-    const overview = buildOverviewFromCourse(course.course || course, progressState);
     const communityConfig = await CommunityConfig.findOne().select('stats channels').lean();
     const stats = communityConfig?.stats || {};
     const channels = communityConfig?.channels || [];
-    const user = await User.findById(req.user.id).select('bootcampStatus').lean();
+    const user = await User.findById(req.user.id).select('bootcampStatus bootcampPaymentStatus').lean();
+    const isRegistered = user?.bootcampStatus !== 'not_enrolled';
+    let overview = { learningPath: [], modules: [], snapshot: [] };
+
+    if (isRegistered) {
+      const course = await ensureCourse();
+      const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+      const progressState = getProgressState(profile?.snapshot);
+      overview = buildOverviewFromCourse(course.course || course, progressState);
+    }
     res.json({
       learningPath: overview.learningPath || [],
       modules: overview.modules || [],
       snapshot: overview.snapshot || [],
       bootcampStatus: user?.bootcampStatus || 'not_enrolled',
+      bootcampPaymentStatus: user?.bootcampPaymentStatus || 'unpaid',
       communityStats: {
         questions: Number(stats.questions || 0),
         answered: Number(stats.answered || 0),
@@ -265,7 +365,7 @@ router.get('/overview', async (req, res, next) => {
   }
 });
 
-router.get('/learning-path', async (req, res, next) => {
+router.get('/learning-path', requireBootcampRegistration, async (req, res, next) => {
   try {
     const course = await ensureCourse();
     const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
@@ -277,7 +377,7 @@ router.get('/learning-path', async (req, res, next) => {
   }
 });
 
-router.get('/snapshot', async (req, res, next) => {
+router.get('/snapshot', requireBootcampRegistration, async (req, res, next) => {
   try {
     const course = await ensureCourse();
     const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
@@ -320,14 +420,162 @@ router.post('/bootcamp', async (req, res, next) => {
       );
     }
 
-    res.json({ bootcampStatus: user.bootcampStatus || 'enrolled' });
+    res.json({
+      bootcampStatus: user.bootcampStatus || 'enrolled',
+      bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/bootcamp/payments/initialize
+router.post('/bootcamp/payments/initialize', async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (user.bootcampStatus === 'not_enrolled') {
+      return res.status(403).json({ error: 'Bootcamp registration required', code: 'bootcamp_registration_required' });
+    }
+
+    const method = String(req.body?.method || 'momo').toLowerCase();
+    const channels = mapPaymentMethodToChannels(method);
+    const reference = `bootcamp_${user._id.toString()}_${Date.now()}`;
+
+    const paystackData = await initializePaystackTransaction({
+      email: user.email,
+      amount: BOOTCAMP_PRICE_GHS,
+      reference,
+      channels,
+      metadata: {
+        userId: user._id.toString(),
+        method,
+        purpose: 'bootcamp',
+      },
+    });
+
+    await BootcampPayment.create({
+      userId: user._id,
+      provider: 'paystack',
+      amount: BOOTCAMP_PRICE_GHS,
+      currency: BOOTCAMP_CURRENCY,
+      status: 'pending',
+      reference,
+      authorizationUrl: paystackData.authorization_url,
+      metadata: paystackData,
+    });
+
+    user.bootcampPaymentStatus = 'pending';
+    user.bootcampPaymentRef = reference;
+    await user.save({ validateBeforeSave: false });
+
+    res.json({
+      authorizationUrl: paystackData.authorization_url,
+      reference,
+      accessCode: paystackData.access_code,
+      amount: BOOTCAMP_PRICE_GHS,
+      currency: BOOTCAMP_CURRENCY,
+      bootcampPaymentStatus: user.bootcampPaymentStatus,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /student/bootcamp/payments/verify
+router.get('/bootcamp/payments/verify', async (req, res, next) => {
+  try {
+    const reference = String(req.query?.reference || '').trim();
+    if (!reference) return res.status(400).json({ error: 'Reference is required' });
+
+    if (!PAYSTACK_SECRET_KEY) {
+      return res.status(500).json({ error: 'Paystack secret key missing' });
+    }
+
+    const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      return res.status(502).json({ error: data?.message || 'Payment verification failed' });
+    }
+
+    const transaction = data.data;
+    const isSuccess = transaction?.status === 'success';
+    const amountMatches = Number(transaction?.amount || 0) === Math.round(BOOTCAMP_PRICE_GHS * 100);
+    const payment = await BootcampPayment.findOne({ reference }).sort({ createdAt: -1 });
+    if (payment) {
+      payment.status = isSuccess && amountMatches ? 'paid' : 'verification_failed';
+      payment.metadata = { ...payment.metadata, verify: transaction };
+      await payment.save({ validateBeforeSave: false });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (isSuccess && amountMatches) {
+      user.bootcampPaymentStatus = 'paid';
+      user.bootcampPaidAt = new Date();
+      if (user.bootcampStatus === 'not_enrolled') {
+        user.bootcampStatus = 'enrolled';
+      }
+      await user.save({ validateBeforeSave: false });
+    }
+
+    res.json({
+      bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
+      bootcampStatus: user.bootcampStatus || 'not_enrolled',
+      bootcampPaidAt: user.bootcampPaidAt,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/bootcamp/payments/btc
+router.post('/bootcamp/payments/btc', async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.bootcampStatus === 'not_enrolled') {
+      return res.status(403).json({ error: 'Bootcamp registration required', code: 'bootcamp_registration_required' });
+    }
+
+    const txHash = String(req.body?.txHash || '').trim();
+    if (!txHash) return res.status(400).json({ error: 'BTC transaction hash is required' });
+
+    await BootcampPayment.create({
+      userId: user._id,
+      provider: 'btc',
+      amount: BOOTCAMP_PRICE_GHS,
+      currency: BOOTCAMP_CURRENCY,
+      status: 'pending',
+      txHash,
+      metadata: {
+        userId: user._id.toString(),
+        purpose: 'bootcamp',
+      },
+    });
+
+    user.bootcampPaymentStatus = 'pending';
+    await user.save({ validateBeforeSave: false });
+
+    res.json({
+      bootcampPaymentStatus: user.bootcampPaymentStatus,
+      bootcampStatus: user.bootcampStatus || 'enrolled',
+    });
   } catch (err) {
     next(err);
   }
 });
 
 // GET /student/course
-router.get('/course', async (_req, res, next) => {
+router.get('/course', requireBootcampRegistration, async (_req, res, next) => {
   try {
     const course = await ensureCourse();
     res.json(course.course || course);
@@ -337,7 +585,7 @@ router.get('/course', async (_req, res, next) => {
 });
 
 // GET /student/courses
-router.get('/courses', async (_req, res, next) => {
+router.get('/courses', requireBootcampRegistration, async (_req, res, next) => {
   try {
     const course = await ensureCourse();
     res.json([course.course || course]);
@@ -347,7 +595,7 @@ router.get('/courses', async (_req, res, next) => {
 });
 
 // GET /student/course/progress
-router.get('/course/progress', async (req, res, next) => {
+router.get('/course/progress', requireBootcampRegistration, async (req, res, next) => {
   try {
     const course = await ensureCourse();
     const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
@@ -378,7 +626,7 @@ router.post('/profile', async (req, res, next) => {
 });
 
 // POST /student/quiz
-router.post('/quiz', async (req, res, next) => {
+router.post('/quiz', requireBootcampAccess, async (req, res, next) => {
   try {
     const payload = req.body || {};
     if (payload.type && payload.id) {
@@ -419,7 +667,7 @@ router.post('/quiz', async (req, res, next) => {
 });
 
 // POST /student/enroll-training
-router.post('/enroll-training', async (req, res, next) => {
+router.post('/enroll-training', requireBootcampAccess, async (req, res, next) => {
   try {
     const training = await enrollTraining(req.user.id, req.body || {});
     res.json(training);
@@ -429,7 +677,7 @@ router.post('/enroll-training', async (req, res, next) => {
 });
 
 // POST /student/modules/:moduleId/complete
-router.post('/modules/:moduleId/complete', async (req, res, next) => {
+router.post('/modules/:moduleId/complete', requireBootcampAccess, async (req, res, next) => {
   try {
     const result = await completeModule(req.user.id, req.params.moduleId);
     res.json(result);

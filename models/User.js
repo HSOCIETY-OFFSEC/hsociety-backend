@@ -41,6 +41,16 @@ const userSchema = new mongoose.Schema(
       enum: ['not_enrolled', 'enrolled', 'completed'],
       default: 'not_enrolled',
     },
+    bootcampPaymentStatus: {
+      type: String,
+      enum: ['unpaid', 'pending', 'paid'],
+      default: 'unpaid',
+    },
+    bootcampPaymentRef: {
+      type: String,
+      default: '',
+    },
+    bootcampPaidAt: Date,
     emailVerified: {
       type: Boolean,
       default: false,

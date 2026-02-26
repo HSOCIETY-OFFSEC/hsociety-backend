@@ -17,3 +17,4 @@ export { default as QuizSubmission } from './QuizSubmission.js';
 export { default as Asset } from './Asset.js';
 export { default as CaseStudy } from './CaseStudy.js';
 export { default as Notification } from './Notification.js';
+export { default as BootcampPayment } from './BootcampPayment.js';

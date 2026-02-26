@@ -22,6 +22,7 @@ router.get('/', async (req, res, next) => {
       organization: user.organization || '',
       avatarUrl: user.avatarUrl || '',
       bootcampStatus: user.bootcampStatus || 'not_enrolled',
+      bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
       role: user.role,
     });
   } catch (err) {
@@ -47,6 +48,7 @@ router.put('/', async (req, res, next) => {
       organization: user.organization || '',
       avatarUrl: user.avatarUrl || '',
       bootcampStatus: user.bootcampStatus || 'not_enrolled',
+      bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
       role: user.role,
     });
   } catch (err) {
@@ -77,6 +79,7 @@ router.put('/avatar', async (req, res, next) => {
       organization: user.organization || '',
       avatarUrl: user.avatarUrl || '',
       bootcampStatus: user.bootcampStatus || 'not_enrolled',
+      bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
       role: user.role,
     });
   } catch (err) {

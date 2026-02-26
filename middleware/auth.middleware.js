@@ -47,6 +47,7 @@ export async function requireAuth(req, res, next) {
     role: user.role,
     avatarUrl: user.avatarUrl || '',
     bootcampStatus: user.bootcampStatus || 'not_enrolled',
+    bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
   };
   next();
 }
@@ -100,6 +101,7 @@ export async function optionalAuth(req, res, next) {
         role: user.role,
         avatarUrl: user.avatarUrl || '',
         bootcampStatus: user.bootcampStatus || 'not_enrolled',
+        bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
       };
     }
   } catch {
