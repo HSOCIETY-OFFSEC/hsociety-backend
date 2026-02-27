@@ -5,7 +5,7 @@ import { listReports } from '../services/corporate.service.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireRoles('corporate', 'admin'));
+router.use(requireRoles('corporate', 'pentester', 'admin'));
 
 router.get('/', async (req, res, next) => {
   try {

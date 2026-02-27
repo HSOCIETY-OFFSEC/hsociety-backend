@@ -33,6 +33,7 @@ import remediationRoutes from './routes/remediation.routes.js';
 import assetsRoutes from './routes/assets.routes.js';
 import billingRoutes from './routes/billing.routes.js';
 import notificationsRoutes from './routes/notifications.routes.js';
+import pentestersRoutes from './routes/pentesters.routes.js';
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
 
@@ -120,6 +121,7 @@ app.use(`${API_PREFIX}/remediation`, remediationRoutes);
 app.use(`${API_PREFIX}/assets`, assetsRoutes);
 app.use(`${API_PREFIX}/billing`, billingRoutes);
 app.use(`${API_PREFIX}/notifications`, notificationsRoutes);
+app.use(`${API_PREFIX}/pentesters`, pentestersRoutes);
 
 // ============================================
 // 404 Handler

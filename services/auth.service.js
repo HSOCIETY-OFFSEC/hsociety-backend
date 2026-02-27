@@ -135,6 +135,8 @@ export function toUserResponse(doc) {
     bootcampStatus: doc.bootcampStatus || 'not_enrolled',
     bootcampPaymentStatus: doc.bootcampPaymentStatus || 'unpaid',
     twoFactorEnabled: !!doc.twoFactorEnabled,
+    hackerHandle: doc.hackerHandle || '',
+    bio: doc.bio || '',
   };
 }
 

@@ -3,6 +3,7 @@
  */
 export { default as User } from './User.js';
 export { default as Pentest } from './Pentest.js';
+export { default as PentestReport } from './PentestReport.js';
 export { default as Feedback } from './Feedback.js';
 export { default as Audit } from './Audit.js';
 export { default as CommunityPost } from './CommunityPost.js';

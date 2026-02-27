@@ -32,6 +32,16 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    hackerHandle: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    bio: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     avatarUrl: {
       type: String,
       default: '',

@@ -24,6 +24,8 @@ router.get('/', async (req, res, next) => {
       bootcampStatus: user.bootcampStatus || 'not_enrolled',
       bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
       role: user.role,
+      hackerHandle: user.hackerHandle || '',
+      bio: user.bio || '',
     });
   } catch (err) {
     next(err);
@@ -38,6 +40,12 @@ router.put('/', async (req, res, next) => {
     if (typeof req.body?.organization === 'string') {
       updates.organization = req.body.organization.trim();
     }
+    if (typeof req.body?.hackerHandle === 'string') {
+      updates.hackerHandle = req.body.hackerHandle.trim();
+    }
+    if (typeof req.body?.bio === 'string') {
+      updates.bio = req.body.bio.trim();
+    }
     if (req.user.role === 'admin' && req.body?.role) updates.role = req.body.role;
     const user = await User.findByIdAndUpdate(req.user.id, { $set: updates }, { new: true }).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -50,6 +58,8 @@ router.put('/', async (req, res, next) => {
       bootcampStatus: user.bootcampStatus || 'not_enrolled',
       bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
       role: user.role,
+      hackerHandle: user.hackerHandle || '',
+      bio: user.bio || '',
     });
   } catch (err) {
     next(err);

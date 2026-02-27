@@ -1,4 +1,4 @@
-import { Asset, DashboardActivity, Notification, Pentest } from '../models/index.js';
+import { Asset, DashboardActivity, Notification, Pentest, PentestReport } from '../models/index.js';
 
 const ACTIVE_STATUSES = new Set(['pending', 'in-progress', 'draft']);
 
@@ -87,6 +87,32 @@ export async function requestEngagement(user, payload = {}) {
 }
 
 export async function listReports(user) {
+  if (user.role === 'pentester') {
+    const docs = await PentestReport.find({ createdBy: user.id })
+      .sort({ createdAt: -1 })
+      .lean();
+    const pentestIds = docs.map((doc) => doc.pentestId).filter(Boolean);
+    const pentests = await Pentest.find({ _id: { $in: pentestIds } })
+      .select('title')
+      .lean();
+    const pentestMap = pentests.reduce((acc, doc) => {
+      acc[doc._id.toString()] = doc.title || 'Engagement';
+      return acc;
+    }, {});
+
+    return docs.map((doc) => ({
+      id: doc._id.toString(),
+      title: doc.title || 'Pentest Report',
+      engagementName: pentestMap[doc.pentestId?.toString?.()] || 'Engagement',
+      date: doc.submittedAt?.getTime?.() || doc.createdAt?.getTime?.() || Date.now(),
+      status: doc.status || 'draft',
+      downloadUrl: '',
+      pentestId: doc.pentestId?.toString?.() || '',
+      summary: doc.summary || '',
+      findingsCount: Array.isArray(doc.findings) ? doc.findings.length : 0,
+    }));
+  }
+
   const query = {
     ...getCorporateQuery(user),
     status: 'completed',
