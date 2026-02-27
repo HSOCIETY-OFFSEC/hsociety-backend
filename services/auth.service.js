@@ -12,6 +12,8 @@ const JWT_ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY || '24h';
 const JWT_REFRESH_EXPIRY = process.env.JWT_REFRESH_EXPIRY || '7d';
 const JWT_2FA_EXPIRY = process.env.JWT_2FA_EXPIRY || '5m';
 
+
+/**Remove these DEV QUICK USERS after testing */
 const DEV_QUICK_USERS = {
   'test-corp@hsociety.local': {
     name: 'Test Corporate',
