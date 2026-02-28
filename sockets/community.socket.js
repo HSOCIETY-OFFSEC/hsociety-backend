@@ -40,6 +40,7 @@ const toMessagePayload = (doc) => ({
   imageUrl: doc.imageUrl || '',
   likes: Number(doc.likes || 0),
   likedBy: (doc.likedBy || []).map((id) => id.toString()),
+  pinned: Boolean(doc.pinned),
   comments: (doc.comments || []).map((comment) => ({
     id: comment._id?.toString() || '',
     userId: comment.userId?.toString() || '',
@@ -78,7 +79,8 @@ export const registerCommunitySocket = (io) => {
         username: user.name || 'Community Member',
         hackerHandle: user.hackerHandle || '',
         role: user.role || '',
-        avatarUrl: user.avatarUrl || ''
+        avatarUrl: user.avatarUrl || '',
+        mutedUntil: user.mutedUntil || null
       };
 
       return next();
@@ -104,6 +106,9 @@ export const registerCommunitySocket = (io) => {
       try {
         const room = normalizeRoom(data?.room || 'general');
         if (!room) return;
+        if (socket.data.user?.mutedUntil && new Date(socket.data.user.mutedUntil) > new Date()) {
+          return;
+        }
 
         const content = sanitizeMessage(data?.content ?? data?.message);
         const imageUrl = String(data?.imageUrl || '').trim();

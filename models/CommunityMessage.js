@@ -15,6 +15,7 @@ const communityMessageSchema = new mongoose.Schema(
     imageUrl: { type: String, default: '' },
     likes: { type: Number, default: 0 },
     likedBy: { type: [mongoose.Schema.Types.ObjectId], ref: 'User', default: [] },
+    pinned: { type: Boolean, default: false },
     comments: {
       type: [
         {

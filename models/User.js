@@ -46,6 +46,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    mutedUntil: {
+      type: Date,
+      default: null,
+    },
     bootcampStatus: {
       type: String,
       enum: ['not_enrolled', 'enrolled', 'completed'],

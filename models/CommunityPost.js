@@ -19,6 +19,7 @@ const communityPostSchema = new mongoose.Schema(
     metadata: mongoose.Schema.Types.Mixed,
     likedBy: { type: [mongoose.Schema.Types.ObjectId], ref: 'User', default: [] },
     savedBy: { type: [mongoose.Schema.Types.ObjectId], ref: 'User', default: [] },
+    pinned: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
