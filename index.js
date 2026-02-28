@@ -38,12 +38,20 @@ import notificationsRoutes from './routes/notifications.routes.js';
 import pentestersRoutes from './routes/pentesters.routes.js';
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { API_CONFIG } from './config/endpoints.config.js';
+import { SecurityEvent } from './models/index.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const API_PREFIX = '/api';  // Frontend expects /api (see VITE_API_BASE_URL)
+const API_PREFIX = API_CONFIG.PREFIX;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+
+if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-secret-change-in-production') {
+  throw new Error('JWT_SECRET must be set in production');
+}
 
 const parseAllowedOrigins = () => {
   const fromList = (process.env.FRONTEND_URLS || '')
@@ -74,6 +82,7 @@ registerCommunitySocket(io);
 // ============================================
 
 app.use(helmet());
+app.set('trust proxy', 1);
 app.use(cors({
   origin(origin, callback) {
     // Allow non-browser requests (e.g. health checks, curl, server-to-server).
@@ -88,9 +97,104 @@ app.use(cors({
   credentials: true
 }));
 app.use(morgan('dev'));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Basic in-memory rate limiting to mitigate abuse without extra infra.
+const requestBuckets = new Map();
+const RATE_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 120;
+const AUTH_RATE_LIMIT_MAX = 12;
+
+const getClientIp = (req) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.socket?.remoteAddress || '';
+};
+
+const requestRateLimiter = (req, res, next) => {
+  const ip = getClientIp(req);
+  const key = `${ip}:${req.path.startsWith('/api/auth') ? 'auth' : 'api'}`;
+  const now = Date.now();
+  const limit = req.path.startsWith('/api/auth') ? AUTH_RATE_LIMIT_MAX : RATE_LIMIT_MAX;
+  const bucket = requestBuckets.get(key);
+
+  if (!bucket || now - bucket.startedAt > RATE_WINDOW_MS) {
+    requestBuckets.set(key, { count: 1, startedAt: now });
+    return next();
+  }
+
+  if (bucket.count >= limit) {
+    res.setHeader('Retry-After', String(Math.ceil((RATE_WINDOW_MS - (now - bucket.startedAt)) / 1000)));
+    return res.status(429).json({ error: 'Too many requests. Please try again shortly.' });
+  }
+
+  bucket.count += 1;
+  requestBuckets.set(key, bucket);
+  return next();
+};
+
+const attachSecurityContext = (req, _res, next) => {
+  req.requestContext = {
+    ipAddress: getClientIp(req),
+    userAgent: String(req.headers['user-agent'] || '').slice(0, 512),
+    deviceId: String(req.headers['x-device-id'] || '').slice(0, 128),
+  };
+  next();
+};
+
+const securityEventLogger = (req, res, next) => {
+  if (!req.path.startsWith('/api') || req.path.startsWith('/api/public/security-events')) {
+    return next();
+  }
+
+  res.on('finish', async () => {
+    const statusCode = Number(res.statusCode || 0);
+    if (statusCode < 400 && req.method === 'GET') return;
+
+    let userId = null;
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        userId = decoded?.sub || null;
+      } catch {
+        userId = null;
+      }
+    }
+
+    try {
+      await SecurityEvent.create({
+        eventType: statusCode >= 400 ? 'api_error' : 'api_activity',
+        action: req.method,
+        path: req.path,
+        method: req.method,
+        statusCode,
+        ipAddress: req.requestContext?.ipAddress || '',
+        macAddress: 'unavailable',
+        userAgent: req.requestContext?.userAgent || '',
+        deviceId: req.requestContext?.deviceId || '',
+        userId,
+        metadata: {
+          query: req.query,
+        },
+      });
+    } catch (err) {
+      console.error('[SECURITY] Failed to write security event:', err.message);
+    }
+  });
+
+  next();
+};
+
+app.use(attachSecurityContext);
+app.use(requestRateLimiter);
+app.use(securityEventLogger);
 
 // ============================================
 // Health Check
@@ -110,23 +214,23 @@ app.get('/health', (_req, res) => {
 // API Routes
 // ============================================
 
-app.use(`${API_PREFIX}/auth`, authRoutes);
-app.use(`${API_PREFIX}/dashboard`, dashboardRoutes);
-app.use(`${API_PREFIX}/pentest`, pentestRoutes);
-app.use(`${API_PREFIX}/audits`, auditsRoutes);
-app.use(`${API_PREFIX}/feedback`, feedbackRoutes);
-app.use(`${API_PREFIX}/community`, communityRoutes);
-app.use(`${API_PREFIX}/student`, studentRoutes);
-app.use(`${API_PREFIX}/profile`, profileRoutes);
-app.use(`${API_PREFIX}/admin`, adminRoutes);
-app.use(`${API_PREFIX}/public`, publicRoutes);
-app.use(`${API_PREFIX}/engagements`, engagementsRoutes);
-app.use(`${API_PREFIX}/reports`, reportsRoutes);
-app.use(`${API_PREFIX}/remediation`, remediationRoutes);
-app.use(`${API_PREFIX}/assets`, assetsRoutes);
-app.use(`${API_PREFIX}/billing`, billingRoutes);
-app.use(`${API_PREFIX}/notifications`, notificationsRoutes);
-app.use(`${API_PREFIX}/pentesters`, pentestersRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.AUTH}`, authRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.DASHBOARD}`, dashboardRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.PENTEST}`, pentestRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.AUDITS}`, auditsRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.FEEDBACK}`, feedbackRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.COMMUNITY}`, communityRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.STUDENT}`, studentRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.PROFILE}`, profileRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.ADMIN}`, adminRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.PUBLIC}`, publicRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.ENGAGEMENTS}`, engagementsRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.REPORTS}`, reportsRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.REMEDIATION}`, remediationRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.ASSETS}`, assetsRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.BILLING}`, billingRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.NOTIFICATIONS}`, notificationsRoutes);
+app.use(`${API_PREFIX}${API_CONFIG.ROUTES.PENTESTERS}`, pentestersRoutes);
 
 // ============================================
 // 404 Handler

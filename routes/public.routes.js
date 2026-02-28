@@ -3,7 +3,8 @@
  * No auth required
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, CommunityMessage, Pentest, SiteContent, Subscription, User } from '../models/index.js';
+import { Audit, CommunityConfig, CommunityMessage, Pentest, SecurityEvent, SiteContent, Subscription, User } from '../models/index.js';
+import { optionalAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
@@ -133,6 +134,37 @@ router.post('/subscribe', async (req, res, next) => {
         ? 'Subscription created'
         : 'Subscription already active',
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /public/security-events
+router.post('/security-events', optionalAuth, async (req, res, next) => {
+  try {
+    const eventType = String(req.body?.eventType || 'frontend_activity').trim().slice(0, 64);
+    const action = String(req.body?.action || 'interaction').trim().slice(0, 128);
+    const path = String(req.body?.path || '').trim().slice(0, 256);
+    const deviceId = String(req.body?.deviceId || '').trim().slice(0, 128);
+    const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
+
+    if (!action) return res.status(400).json({ error: 'Action is required' });
+
+    await SecurityEvent.create({
+      eventType,
+      action,
+      path,
+      method: 'CLIENT',
+      statusCode: 200,
+      ipAddress: req.ip || '',
+      macAddress: 'unavailable',
+      userAgent: String(req.headers['user-agent'] || '').slice(0, 512),
+      deviceId,
+      metadata,
+      userId: req.user?.id || null,
+    });
+
+    res.status(201).json({ success: true });
   } catch (err) {
     next(err);
   }

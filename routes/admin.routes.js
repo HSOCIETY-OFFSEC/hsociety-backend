@@ -2,7 +2,7 @@
  * Admin Routes
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Pentest, SiteContent, User } from '../models/index.js';
+import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Pentest, SecurityEvent, SiteContent, User } from '../models/index.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
 import {
   approvePaidPentest,
@@ -443,6 +443,88 @@ router.patch('/community/config', async (req, res, next) => {
 
     const doc = await CommunityConfig.findOneAndUpdate({}, { $set: updates }, { new: true, upsert: true }).lean();
     res.json(doc || {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /admin/security/events
+router.get('/security/events', async (req, res, next) => {
+  try {
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 300) : 100;
+
+    const events = await SecurityEvent.find()
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('userId', 'email name role')
+      .lean();
+
+    const payload = events.map((event) => ({
+      id: event._id.toString(),
+      createdAt: event.createdAt,
+      eventType: event.eventType,
+      action: event.action,
+      path: event.path,
+      statusCode: Number(event.statusCode || 0),
+      ipAddress: event.ipAddress || '',
+      macAddress: event.macAddress || 'unavailable',
+      userAgent: event.userAgent || '',
+      deviceId: event.deviceId || '',
+      user: event.userId
+        ? {
+            id: event.userId._id?.toString?.() || '',
+            email: event.userId.email || '',
+            name: event.userId.name || '',
+            role: event.userId.role || '',
+          }
+        : null,
+      metadata: event.metadata || {},
+    }));
+
+    res.json({ items: payload, total: payload.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /admin/security/summary
+router.get('/security/summary', async (_req, res, next) => {
+  try {
+    const since = new Date(Date.now() - 1000 * 60 * 60 * 24);
+    const [events24h, uniqueIpsAgg, authFailures, topActions, topPaths] = await Promise.all([
+      SecurityEvent.countDocuments({ createdAt: { $gte: since } }),
+      SecurityEvent.aggregate([
+        { $match: { createdAt: { $gte: since }, ipAddress: { $nin: ['', null] } } },
+        { $group: { _id: '$ipAddress' } },
+        { $count: 'total' }
+      ]),
+      SecurityEvent.countDocuments({
+        createdAt: { $gte: since },
+        eventType: { $in: ['api_error', 'auth_failure'] },
+      }),
+      SecurityEvent.aggregate([
+        { $match: { createdAt: { $gte: since } } },
+        { $group: { _id: '$action', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 5 }
+      ]),
+      SecurityEvent.aggregate([
+        { $match: { createdAt: { $gte: since }, path: { $nin: ['', null] } } },
+        { $group: { _id: '$path', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 5 }
+      ]),
+    ]);
+
+    res.json({
+      events24h,
+      uniqueIps24h: uniqueIpsAgg?.[0]?.total || 0,
+      authFailures24h: authFailures || 0,
+      topActions: topActions.map((row) => ({ action: row._id || 'unknown', count: row.count || 0 })),
+      topPaths: topPaths.map((row) => ({ path: row._id || 'unknown', count: row.count || 0 })),
+      macAddressNote: 'Real client MAC addresses are not exposed by browsers on the public web.',
+    });
   } catch (err) {
     next(err);
   }

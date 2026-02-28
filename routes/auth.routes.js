@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import * as authService from '../services/auth.service.js';
 import * as twoFAService from '../services/twofa.service.js';
+import { SecurityEvent } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
@@ -29,6 +30,21 @@ router.post('/login', async (req, res, next) => {
     const result = await authService.login(email, password);
     res.json(result);
   } catch (err) {
+    if (err.status === 401 || err.status === 400) {
+      SecurityEvent.create({
+        eventType: 'auth_failure',
+        action: 'login',
+        path: '/auth/login',
+        method: 'POST',
+        statusCode: Number(err.status || 401),
+        ipAddress: req.ip || '',
+        macAddress: 'unavailable',
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 512),
+        metadata: {
+          email: typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '',
+        },
+      }).catch(() => {});
+    }
     if (err.status) {
       return res.status(err.status).json({ error: err.message });
     }
