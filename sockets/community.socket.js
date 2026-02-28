@@ -24,7 +24,6 @@ const isValidImageUrl = (value) => {
   if (!value) return false;
   if (typeof value !== 'string') return false;
   if (value.length > MAX_IMAGE_LENGTH) return false;
-  if (value.startsWith('data:image/')) return true;
   if (value.startsWith('http://') || value.startsWith('https://')) return true;
   return false;
 };

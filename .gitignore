@@ -18,6 +18,7 @@ pnpm-debug.log*
 pids/
 *.pid
 *.pid.lock
+uploads/
 
 # Build and coverage output
 dist/

@@ -13,6 +13,8 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 import mongoose from 'mongoose';
 import { connectDB } from './db/index.js';
@@ -40,6 +42,8 @@ import bcrypt from 'bcryptjs';
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_PREFIX = '/api';  // Frontend expects /api (see VITE_API_BASE_URL)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const parseAllowedOrigins = () => {
   const fromList = (process.env.FRONTEND_URLS || '')
@@ -86,6 +90,7 @@ app.use(cors({
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ============================================
 // Health Check

@@ -3,10 +3,37 @@
  * Matches frontend API_ENDPOINTS.COMMUNITY
  */
 import { Router } from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { CommunityConfig, CommunityMessage, CommunityPost } from '../models/index.js';
 import { optionalAuth, requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadRoot = path.join(__dirname, '..', 'uploads', 'community');
+
+if (!fs.existsSync(uploadRoot)) {
+  fs.mkdirSync(uploadRoot, { recursive: true });
+}
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadRoot),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname) || '.png';
+      const safeName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+      cb(null, safeName);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype?.startsWith('image/')) return cb(null, true);
+    return cb(new Error('Only image files are allowed'));
+  },
+});
 
 const DEFAULT_CHANNELS = [
   { id: 'intro', name: 'Introductions' },
@@ -204,6 +231,14 @@ router.post('/posts/:id/save', requireAuth, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// POST /community/uploads
+router.post('/uploads', requireAuth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Image is required' });
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const url = `${baseUrl}/uploads/community/${req.file.filename}`;
+  res.status(201).json({ url });
 });
 
 // GET /community/messages?room=general&limit=50

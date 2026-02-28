@@ -97,6 +97,33 @@ router.put('/avatar', async (req, res, next) => {
   }
 });
 
+// DELETE /profile/avatar
+router.delete('/avatar', async (req, res, next) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { $set: { avatarUrl: '' } },
+      { new: true }
+    ).lean();
+
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({
+      id: user._id.toString(),
+      email: user.email,
+      name: user.name || '',
+      organization: user.organization || '',
+      avatarUrl: '',
+      bootcampStatus: user.bootcampStatus || 'not_enrolled',
+      bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
+      role: user.role,
+      hackerHandle: user.hackerHandle || '',
+      bio: user.bio || '',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // DELETE /profile
 router.delete('/', async (req, res, next) => {
   try {
