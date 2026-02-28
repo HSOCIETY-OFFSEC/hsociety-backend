@@ -98,6 +98,7 @@ const toPostResponse = (post, viewerId) => ({
   likes: Number(post.likes || 0),
   replies: Number(post.replies || 0),
   tags: post.tags || [],
+  pinned: Boolean(post.pinned),
   avatar:
     post.authorAvatar ||
     'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=80',
@@ -320,7 +321,7 @@ router.get('/messages', requireAuth, async (req, res, next) => {
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 50;
 
     const messages = await CommunityMessage.find({ room })
-      .sort({ createdAt: -1 })
+      .sort({ pinned: -1, createdAt: -1 })
       .limit(limit)
       .lean();
 
@@ -338,6 +339,7 @@ router.get('/messages', requireAuth, async (req, res, next) => {
         imageUrl: message.imageUrl || '',
         likes: Number(message.likes || 0),
         likedBy: (message.likedBy || []).map((id) => id.toString()),
+        pinned: Boolean(message.pinned),
         comments: (message.comments || []).map((comment) => ({
           id: comment._id?.toString() || '',
           userId: comment.userId?.toString() || '',
