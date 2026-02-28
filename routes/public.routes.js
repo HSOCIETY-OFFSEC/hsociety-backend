@@ -3,7 +3,7 @@
  * No auth required
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, CommunityMessage, Pentest, Subscription, User } from '../models/index.js';
+import { Audit, CommunityConfig, CommunityMessage, Pentest, SiteContent, Subscription, User } from '../models/index.js';
 
 const router = Router();
 
@@ -65,6 +65,35 @@ router.get('/landing-stats', async (_req, res, next) => {
         countriesSupported: 0,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const getSiteContent = async () => {
+  const doc = await SiteContent.findOne({ key: 'site' }).lean();
+  if (!doc) {
+    const created = await SiteContent.create({ key: 'site' });
+    return created.toObject();
+  }
+  return doc;
+};
+
+// GET /public/content/landing
+router.get('/content/landing', async (_req, res, next) => {
+  try {
+    const content = await getSiteContent();
+    res.json({ landing: content.landing || {} });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /public/blog-posts
+router.get('/blog-posts', async (_req, res, next) => {
+  try {
+    const content = await getSiteContent();
+    res.json({ posts: content.blog?.posts || [] });
   } catch (err) {
     next(err);
   }

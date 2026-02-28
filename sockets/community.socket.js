@@ -106,7 +106,10 @@ export const registerCommunitySocket = (io) => {
       try {
         const room = normalizeRoom(data?.room || 'general');
         if (!room) return;
-        if (socket.data.user?.mutedUntil && new Date(socket.data.user.mutedUntil) > new Date()) {
+        const userId = socket.data.user?.id;
+        if (!userId) return;
+        const latestUser = await User.findById(userId).select('mutedUntil').lean();
+        if (latestUser?.mutedUntil && new Date(latestUser.mutedUntil) > new Date()) {
           return;
         }
 

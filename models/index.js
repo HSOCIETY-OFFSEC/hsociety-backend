@@ -20,3 +20,4 @@ export { default as CaseStudy } from './CaseStudy.js';
 export { default as Notification } from './Notification.js';
 export { default as BootcampPayment } from './BootcampPayment.js';
 export { default as Subscription } from './Subscription.js';
+export { default as SiteContent } from './SiteContent.js';

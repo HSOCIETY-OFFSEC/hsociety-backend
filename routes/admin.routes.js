@@ -2,7 +2,7 @@
  * Admin Routes
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Pentest, User } from '../models/index.js';
+import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Pentest, SiteContent, User } from '../models/index.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
 import {
   approvePaidPentest,
@@ -23,6 +23,7 @@ const toUserResponse = (user) => ({
   role: user.role,
   organization: user.organization || '',
   bootcampStatus: user.bootcampStatus || 'not_enrolled',
+  mutedUntil: user.mutedUntil || null,
   createdAt: user.createdAt,
 });
 
@@ -58,6 +59,27 @@ router.patch('/users/:id', async (req, res, next) => {
     const user = await User.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true }).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(toUserResponse(user));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /admin/users/:id/mute
+router.patch('/users/:id/mute', async (req, res, next) => {
+  try {
+    const minutes = Number(req.body?.minutes || 0);
+    const mutedUntil =
+      minutes > 0 ? new Date(Date.now() + minutes * 60 * 1000) : null;
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: { mutedUntil } },
+      { new: true }
+    ).lean();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({
+      id: user._id.toString(),
+      mutedUntil: user.mutedUntil || null
+    });
   } catch (err) {
     next(err);
   }
@@ -173,6 +195,132 @@ router.get('/analytics', async (_req, res, next) => {
   try {
     const data = await getAnalytics();
     res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /admin/community/messages
+router.get('/community/messages', async (req, res, next) => {
+  try {
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 100;
+    const messages = await CommunityMessage.find()
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+    res.json(messages);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /admin/community/messages/:id
+router.patch('/community/messages/:id', async (req, res, next) => {
+  try {
+    const updates = {};
+    if (req.body?.pinned !== undefined) updates.pinned = Boolean(req.body.pinned);
+    const doc = await CommunityMessage.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true }
+    ).lean();
+    if (!doc) return res.status(404).json({ error: 'Message not found' });
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /admin/community/messages/:id
+router.delete('/community/messages/:id', async (req, res, next) => {
+  try {
+    const doc = await CommunityMessage.findByIdAndDelete(req.params.id).lean();
+    if (!doc) return res.status(404).json({ error: 'Message not found' });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /admin/community/posts
+router.get('/community/posts', async (_req, res, next) => {
+  try {
+    const posts = await CommunityPost.find().sort({ createdAt: -1 }).lean();
+    res.json(posts);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /admin/content
+router.get('/content', async (_req, res, next) => {
+  try {
+    let content = await SiteContent.findOne({ key: 'site' }).lean();
+    if (!content) {
+      content = await SiteContent.create({ key: 'site' });
+      return res.json(content.toObject());
+    }
+    res.json(content);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /admin/content
+router.patch('/content', async (req, res, next) => {
+  try {
+    const updates = {};
+    if (req.body?.landing && typeof req.body.landing === 'object') {
+      updates['landing.heroTitle'] = String(req.body.landing.heroTitle || '').trim();
+      updates['landing.heroDescription'] = String(req.body.landing.heroDescription || '').trim();
+      updates['landing.ctaPrimary'] = String(req.body.landing.ctaPrimary || '').trim();
+      updates['landing.ctaSecondary'] = String(req.body.landing.ctaSecondary || '').trim();
+      updates['landing.communitySubtitle'] = String(req.body.landing.communitySubtitle || '').trim();
+    }
+    if (req.body?.blog && Array.isArray(req.body.blog.posts)) {
+      updates['blog.posts'] = req.body.blog.posts.map((post) => ({
+        title: String(post.title || '').trim(),
+        date: String(post.date || '').trim(),
+        summary: String(post.summary || '').trim(),
+      })).filter((post) => post.title && post.summary);
+    }
+
+    const content = await SiteContent.findOneAndUpdate(
+      { key: 'site' },
+      { $set: updates },
+      { new: true, upsert: true }
+    ).lean();
+    res.json(content || {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /admin/community/posts/:id
+router.patch('/community/posts/:id', async (req, res, next) => {
+  try {
+    const updates = {};
+    if (req.body?.pinned !== undefined) updates.pinned = Boolean(req.body.pinned);
+    if (req.body?.visibility) updates.visibility = req.body.visibility;
+    const doc = await CommunityPost.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true }
+    ).lean();
+    if (!doc) return res.status(404).json({ error: 'Post not found' });
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /admin/community/posts/:id
+router.delete('/community/posts/:id', async (req, res, next) => {
+  try {
+    const doc = await CommunityPost.findByIdAndDelete(req.params.id).lean();
+    if (!doc) return res.status(404).json({ error: 'Post not found' });
+    res.status(204).send();
   } catch (err) {
     next(err);
   }
