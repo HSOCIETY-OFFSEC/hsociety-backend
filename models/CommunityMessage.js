@@ -7,6 +7,9 @@ const communityMessageSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     username: { type: String, required: true },
+    hackerHandle: { type: String, default: '' },
+    userRole: { type: String, default: '' },
+    userAvatar: { type: String, default: '' },
     room: { type: String, required: true },
     content: { type: String, default: '', maxlength: 500 },
     imageUrl: { type: String, default: '' },

@@ -32,6 +32,9 @@ const toMessagePayload = (doc) => ({
   id: doc._id.toString(),
   userId: doc.userId?.toString() || '',
   username: doc.username,
+  hackerHandle: doc.hackerHandle || '',
+  userRole: doc.userRole || '',
+  userAvatar: doc.userAvatar || '',
   room: doc.room,
   content: doc.content,
   imageUrl: doc.imageUrl || '',
@@ -72,7 +75,10 @@ export const registerCommunitySocket = (io) => {
 
       socket.data.user = {
         id: user._id.toString(),
-        username: user.name || 'Community Member'
+        username: user.name || 'Community Member',
+        hackerHandle: user.hackerHandle || '',
+        role: user.role || '',
+        avatarUrl: user.avatarUrl || ''
       };
 
       return next();
@@ -108,6 +114,9 @@ export const registerCommunitySocket = (io) => {
         const messageDoc = await CommunityMessage.create({
           userId: socket.data.user.id,
           username: socket.data.user.username,
+          hackerHandle: socket.data.user.hackerHandle || '',
+          userRole: socket.data.user.role || '',
+          userAvatar: socket.data.user.avatarUrl || '',
           room,
           content,
           imageUrl: hasImage ? imageUrl : ''
@@ -140,25 +149,27 @@ export const registerCommunitySocket = (io) => {
         const userId = socket.data.user?.id;
         if (!userId) return;
 
-        const message = await CommunityMessage.findById(messageId);
+        const message = await CommunityMessage.findById(messageId).lean();
         if (!message) return;
 
-        const alreadyLiked = message.likedBy.some((id) => id.toString() === userId);
-        if (alreadyLiked) {
-          message.likedBy = message.likedBy.filter((id) => id.toString() !== userId);
-          message.likes = Math.max(0, message.likes - 1);
-        } else {
-          message.likedBy.push(userId);
-          message.likes += 1;
+        const alreadyLiked = (message.likedBy || []).some((id) => id.toString() === userId);
+        const update = alreadyLiked
+          ? { $pull: { likedBy: userId }, $inc: { likes: -1 } }
+          : { $addToSet: { likedBy: userId }, $inc: { likes: 1 } };
+
+        const updated = await CommunityMessage.findByIdAndUpdate(messageId, update, { new: true });
+        if (!updated) return;
+
+        if (updated.likes < 0) {
+          updated.likes = 0;
+          await updated.save();
         }
 
-        await message.save();
-
-        io.to(message.room).emit('messageLiked', {
-          messageId: message._id.toString(),
-          room: message.room,
-          likes: message.likes,
-          likedBy: message.likedBy.map((id) => id.toString())
+        io.to(updated.room).emit('messageLiked', {
+          messageId: updated._id.toString(),
+          room: updated.room,
+          likes: updated.likes,
+          likedBy: updated.likedBy.map((id) => id.toString())
         });
       } catch (err) {
         console.error('[SOCKET] likeMessage error:', err);
@@ -174,9 +185,6 @@ export const registerCommunitySocket = (io) => {
         const userId = socket.data.user?.id;
         if (!userId) return;
 
-        const message = await CommunityMessage.findById(messageId);
-        if (!message) return;
-
         const comment = {
           userId,
           username: socket.data.user?.username || 'Community Member',
@@ -184,13 +192,17 @@ export const registerCommunitySocket = (io) => {
           createdAt: new Date()
         };
 
-        message.comments.push(comment);
-        await message.save();
+        const updated = await CommunityMessage.findByIdAndUpdate(
+          messageId,
+          { $push: { comments: comment } },
+          { new: true }
+        );
+        if (!updated) return;
 
-        const savedComment = message.comments[message.comments.length - 1];
-        io.to(message.room).emit('commentAdded', {
-          messageId: message._id.toString(),
-          room: message.room,
+        const savedComment = updated.comments[updated.comments.length - 1];
+        io.to(updated.room).emit('commentAdded', {
+          messageId: updated._id.toString(),
+          room: updated.room,
           comment: {
             id: savedComment._id?.toString() || '',
             userId: savedComment.userId?.toString() || '',

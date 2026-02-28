@@ -3,7 +3,7 @@
  * No auth required
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, Pentest, Subscription, User } from '../models/index.js';
+import { Audit, CommunityConfig, CommunityMessage, Pentest, Subscription, User } from '../models/index.js';
 
 const router = Router();
 
@@ -104,6 +104,97 @@ router.post('/subscribe', async (req, res, next) => {
         ? 'Subscription created'
         : 'Subscription already active',
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /public/community-profiles
+router.get('/community-profiles', async (req, res, next) => {
+  try {
+    const limitRaw = Number(req.query.limit || 6);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 12) : 6;
+
+    const messageAgg = await CommunityMessage.aggregate([
+      {
+        $group: {
+          _id: '$userId',
+          messages: { $sum: 1 },
+          likesReceived: { $sum: '$likes' },
+          imagesShared: {
+            $sum: { $cond: [{ $ne: ['$imageUrl', ''] }, 1, 0] }
+          }
+        }
+      },
+      { $sort: { likesReceived: -1, messages: -1 } },
+      { $limit: limit }
+    ]);
+
+    const commentAgg = await CommunityMessage.aggregate([
+      { $unwind: '$comments' },
+      {
+        $group: {
+          _id: '$comments.userId',
+          commentsMade: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const commentsMap = new Map(
+      commentAgg.map((row) => [String(row._id || ''), Number(row.commentsMade || 0)])
+    );
+
+    const userIds = messageAgg.map((row) => row._id).filter(Boolean);
+    let users = [];
+    if (userIds.length) {
+      users = await User.find({ _id: { $in: userIds } })
+        .select('_id name role organization avatarUrl hackerHandle bio createdAt')
+        .lean();
+    }
+
+    if (!users.length) {
+      users = await User.find()
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .select('_id name role organization avatarUrl hackerHandle bio createdAt')
+        .lean();
+    }
+
+    const statsMap = new Map(
+      messageAgg.map((row) => [
+        String(row._id || ''),
+        {
+          messages: Number(row.messages || 0),
+          likesReceived: Number(row.likesReceived || 0),
+          imagesShared: Number(row.imagesShared || 0),
+        }
+      ])
+    );
+
+    const payload = users.map((user) => {
+      const stats = statsMap.get(String(user._id)) || {
+        messages: 0,
+        likesReceived: 0,
+        imagesShared: 0,
+      };
+      return {
+        id: user._id.toString(),
+        name: user.name || 'Community Member',
+        role: user.role || 'member',
+        organization: user.organization || '',
+        avatarUrl: user.avatarUrl || '',
+        hackerHandle: user.hackerHandle || '',
+        bio: user.bio || '',
+        stats: {
+          messages: stats.messages,
+          likesReceived: stats.likesReceived,
+          commentsMade: commentsMap.get(String(user._id)) || 0,
+          imagesShared: stats.imagesShared,
+        }
+      };
+    });
+
+    res.json({ profiles: payload });
   } catch (err) {
     next(err);
   }

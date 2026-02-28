@@ -7,7 +7,8 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { CommunityConfig, CommunityMessage, CommunityPost } from '../models/index.js';
+import mongoose from 'mongoose';
+import { CommunityConfig, CommunityMessage, CommunityPost, User } from '../models/index.js';
 import { optionalAuth, requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
@@ -122,9 +123,21 @@ router.get('/overview', optionalAuth, async (req, res, next) => {
       query = query.sort({ likes: -1, createdAt: -1 });
     }
 
-    const posts = await query.limit(30).lean();
+    const [posts, userCount, messageCount, postCount] = await Promise.all([
+      query.limit(30).lean(),
+      User.countDocuments(),
+      CommunityMessage.countDocuments(),
+      CommunityPost.countDocuments(),
+    ]);
+
+    const totalPosts = Number(messageCount || 0) + Number(postCount || 0);
+    const resolvedStats = {
+      learners: Number(userCount || 0),
+      questions: totalPosts,
+      answered: Number(config?.stats?.answered || 0),
+    };
     res.json({
-      stats: config.stats || {},
+      stats: resolvedStats,
       channels: config.channels?.length ? config.channels : DEFAULT_CHANNELS,
       tags: config.tags?.length ? config.tags : DEFAULT_TAGS,
       posts: posts.map((post) => toPostResponse(post, viewerId)),
@@ -241,6 +254,64 @@ router.post('/uploads', requireAuth, upload.single('file'), (req, res) => {
   res.status(201).json({ url });
 });
 
+// GET /community/profile/:handle
+router.get('/profile/:handle', requireAuth, async (req, res, next) => {
+  try {
+    const rawHandle = String(req.params.handle || '').trim();
+    if (!rawHandle) return res.status(400).json({ error: 'Profile handle is required' });
+
+    let user = await User.findOne({ hackerHandle: new RegExp(`^${rawHandle}$`, 'i') }).lean();
+
+    if (!user && mongoose.Types.ObjectId.isValid(rawHandle)) {
+      user = await User.findById(rawHandle).lean();
+    }
+
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const userId = user._id;
+
+    const [messagesCount, likesAgg, commentsMadeAgg, imagesCount, rooms] = await Promise.all([
+      CommunityMessage.countDocuments({ userId }),
+      CommunityMessage.aggregate([
+        { $match: { userId } },
+        { $group: { _id: null, total: { $sum: '$likes' } } }
+      ]),
+      CommunityMessage.aggregate([
+        { $unwind: '$comments' },
+        { $match: { 'comments.userId': userId } },
+        { $group: { _id: null, total: { $sum: 1 } } }
+      ]),
+      CommunityMessage.countDocuments({ userId, imageUrl: { $ne: '' } }),
+      CommunityMessage.distinct('room', { userId }),
+    ]);
+
+    const likesReceived = likesAgg?.[0]?.total || 0;
+    const commentsMade = commentsMadeAgg?.[0]?.total || 0;
+
+    res.json({
+      user: {
+        id: user._id.toString(),
+        name: user.name || '',
+        role: user.role || '',
+        organization: user.organization || '',
+        avatarUrl: user.avatarUrl || '',
+        hackerHandle: user.hackerHandle || '',
+        bio: user.bio || '',
+        joinedAt: user.createdAt || null
+      },
+      stats: {
+        messages: messagesCount || 0,
+        likesReceived,
+        commentsMade,
+        imagesShared: imagesCount || 0,
+        roomsActive: rooms?.length || 0
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /community/messages?room=general&limit=50
 router.get('/messages', requireAuth, async (req, res, next) => {
   try {
@@ -259,6 +330,9 @@ router.get('/messages', requireAuth, async (req, res, next) => {
         id: message._id.toString(),
         userId: message.userId?.toString() || '',
         username: message.username,
+        hackerHandle: message.hackerHandle || '',
+        userRole: message.userRole || '',
+        userAvatar: message.userAvatar || '',
         room: message.room,
         content: message.content,
         imageUrl: message.imageUrl || '',
