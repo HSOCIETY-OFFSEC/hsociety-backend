@@ -1,16 +1,24 @@
 /**
- * Mobile OTP service - 6-digit codes, 5 min expiry, SMS placeholder
- * SECURITY UPDATE IMPLEMENTED: OTP for login/registration, secure storage, no OTP in response
+ * Mobile OTP service - 6-digit codes, 5 min expiry
+ * Sends OTP via Twilio SMS when configured; otherwise logs to console (dev).
+ * SECURITY: OTP never returned in API response.
  */
 import crypto from 'crypto';
 
 const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_LENGTH = 6;
-const store = new Map(); // key: mobile or email::mobile -> { code, expiresAt }
+const store = new Map(); // key: context::normalized -> { code, expiresAt }
 
 function normalizeMobile(mobile) {
   if (!mobile || typeof mobile !== 'string') return '';
   return mobile.replace(/\D/g, '').slice(-15);
+}
+
+/** Build E.164 number for Twilio (e.g. +15551234567). */
+function toE164(normalizedDigits) {
+  const country = process.env.TWILIO_DEFAULT_COUNTRY_CODE || '1';
+  const prefix = normalizedDigits.startsWith(country) ? '' : country;
+  return `+${prefix}${normalizedDigits}`;
 }
 
 function generateOTP() {
@@ -18,11 +26,30 @@ function generateOTP() {
   return String(digits).padStart(OTP_LENGTH, '0');
 }
 
+/** Send OTP via Twilio SMS. Returns true if sent, false otherwise. */
+async function sendOTPViaTwilio(toNormalized, code, context) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+  if (!accountSid || !authToken || !fromNumber) return false;
+  try {
+    const twilio = (await import('twilio')).default;
+    const client = twilio(accountSid, authToken);
+    const to = toE164(toNormalized);
+    const body = `Your HSOCIETY ${context} code is: ${code}. It expires in 5 minutes.`;
+    await client.messages.create({ body, from: fromNumber, to });
+    return true;
+  } catch (err) {
+    console.error('[OTP] Twilio send error:', err.message);
+    return false;
+  }
+}
+
 /**
- * Create OTP for a mobile number. Returns success; OTP is sent via SMS placeholder.
- * SECURITY UPDATE IMPLEMENTED: Do not return OTP in API response.
+ * Create OTP for a mobile number and send it (Twilio if configured, else log).
+ * SECURITY: Do not return OTP in API response.
  */
-export function createAndSendOTP(mobile, context = 'login') {
+export async function createAndSendOTP(mobile, context = 'login') {
   const normalized = normalizeMobile(mobile);
   if (normalized.length < 10) {
     return { success: false, message: 'Invalid mobile number' };
@@ -31,15 +58,10 @@ export function createAndSendOTP(mobile, context = 'login') {
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
   const key = `${context}::${normalized}`;
   store.set(key, { code, expiresAt });
-  // SECURITY UPDATE IMPLEMENTED: Placeholder for SMS API - replace with real provider (Twilio, etc.)
-  if (process.env.SMS_API_ENABLED === 'true' && process.env.SMS_API_SEND) {
-    try {
-      // require(process.env.SMS_API_SEND)(normalized, code, context);
-    } catch (e) {
-      console.error('[OTP] SMS send placeholder error:', e.message);
-    }
-  } else {
-    console.log(`[OTP] ${context} for ${normalized}: ${code} (expires in 5 min) - SMS placeholder`);
+
+  const sent = await sendOTPViaTwilio(normalized, code, context);
+  if (!sent) {
+    console.log(`[OTP] ${context} for ${normalized}: ${code} (expires in 5 min) - set TWILIO_* to send real SMS`);
   }
   return { success: true, message: 'OTP sent to your mobile', expiresIn: 300 };
 }
@@ -68,9 +90,9 @@ export function verifyOTP(mobile, code, context = 'login') {
 }
 
 /**
- * Resend OTP - invalidates previous, creates new. Rate limit should be applied at route level.
+ * Resend OTP - invalidates previous, creates new. Rate limit at route level.
  */
-export function resendOTP(mobile, context = 'login') {
+export async function resendOTP(mobile, context = 'login') {
   return createAndSendOTP(mobile, context);
 }
 

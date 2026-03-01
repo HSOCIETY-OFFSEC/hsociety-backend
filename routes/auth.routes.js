@@ -1,21 +1,20 @@
 /**
  * Auth Routes
  * Matches frontend API_ENDPOINTS.AUTH
- * SECURITY UPDATE IMPLEMENTED: Refresh in cookie, logout invalidate, change-password, OTP, logging
+ * SECURITY UPDATE IMPLEMENTED: Refresh in cookie, logout invalidate, change-password, logging
  */
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import * as authService from '../services/auth.service.js';
 import * as twoFAService from '../services/twofa.service.js';
-import * as otpService from '../services/otp.service.js';
 import { SecurityEvent } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import { setRefreshTokenCookie, clearRefreshTokenCookie, getRefreshTokenFromCookie } from '../utils/cookies.js';
 import { authRateLimit } from '../middleware/rateLimit.auth.js';
-import { validateLogin, validateRegister, validateOtpRequest, validateOtpVerify } from '../middleware/validate.auth.js';
+import { validateLogin, validateRegister } from '../middleware/validate.auth.js';
 
 const router = Router();
-// SECURITY UPDATE IMPLEMENTED: Stricter rate limit on auth (5 login/OTP per 15 min per IP)
+// Rate limit on auth routes
 router.use(authRateLimit);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 
@@ -41,11 +40,11 @@ router.post('/register', validateRegister, async (req, res, next) => {
   }
 });
 
-// POST /auth/login - SECURITY UPDATE IMPLEMENTED: Joi validation, optional OTP
+// POST /auth/login
 router.post('/login', validateLogin, async (req, res, next) => {
   try {
-    const { email, password, mobile, otp } = req.body || {};
-    const result = await authService.login(email, password, requestMeta(req), { mobile, otp });
+    const { email, password } = req.body || {};
+    const result = await authService.login(email, password, requestMeta(req));
     if (result.refreshToken) {
       setRefreshTokenCookie(res, result.refreshToken);
     }
@@ -169,64 +168,6 @@ router.get('/verify', requireAuth, (req, res) => {
 // GET /auth/me - current user (Bearer required)
 router.get('/me', requireAuth, (req, res) => {
   res.json(req.user);
-});
-
-// SECURITY UPDATE IMPLEMENTED: Mobile OTP - request, verify, resend (SMS placeholder)
-router.post('/otp/request', validateOtpRequest, async (req, res, next) => {
-  try {
-    const { mobile, context } = req.body || {};
-    const result = otpService.createAndSendOTP(mobile, context || 'login');
-    if (!result.success) {
-      return res.status(400).json({ error: result.message });
-    }
-    SecurityEvent.create({
-      eventType: 'otp_request',
-      action: 'otp_request',
-      path: '/auth/otp/request',
-      method: 'POST',
-      statusCode: 200,
-      ipAddress: requestMeta(req).ipAddress,
-      userAgent: requestMeta(req).userAgent,
-      metadata: { context: context || 'login' },
-    }).catch(() => {});
-    res.json({ success: true, message: result.message, expiresIn: result.expiresIn });
-  } catch (err) {
-    next(err);
-  }
-});
-router.post('/otp/verify', validateOtpVerify, async (req, res, next) => {
-  try {
-    const { mobile, code, context } = req.body || {};
-    const result = otpService.verifyOTP(mobile, code, context || 'login');
-    if (!result.success) {
-      SecurityEvent.create({
-        eventType: 'otp_failure',
-        action: 'otp_verify',
-        path: '/auth/otp/verify',
-        method: 'POST',
-        statusCode: 401,
-        ipAddress: requestMeta(req).ipAddress,
-        userAgent: requestMeta(req).userAgent,
-        metadata: { reason: result.message },
-      }).catch(() => {});
-      return res.status(401).json({ error: result.message });
-    }
-    res.json({ success: true });
-  } catch (err) {
-    next(err);
-  }
-});
-router.post('/otp/resend', async (req, res, next) => {
-  try {
-    const { mobile, context } = req.body || {};
-    const result = otpService.resendOTP(mobile, context || 'login');
-    if (!result.success) {
-      return res.status(400).json({ error: result.message });
-    }
-    res.json({ success: true, message: result.message, expiresIn: result.expiresIn });
-  } catch (err) {
-    next(err);
-  }
 });
 
 // ============================================

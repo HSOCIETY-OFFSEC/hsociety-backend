@@ -109,9 +109,8 @@ export function toUserResponse(doc) {
 }
 
 /**
- * Register: map frontend DTO to User, hash password, create user, return user + tokens.
- * SECURITY UPDATE IMPLEMENTED: Strong password validation, bcrypt 12, refresh stored in DB.
- * Frontend sends: { role, profile: { fullName, organization }, credentials: { email, password }, consent, metadata }
+ * Register: create user.
+ * Frontend sends: { role, profile: { fullName, organization }, credentials: { email, password } }
  */
 export async function register(payload, meta = {}) {
   const { role: frontendRole, profile, credentials } = payload || {};
@@ -158,25 +157,14 @@ export async function register(payload, meta = {}) {
 }
 
 /**
- * Login: find user by email, compare password, enforce strong password for existing users.
- * SECURITY UPDATE IMPLEMENTED: Optional mobile OTP verification; force password change if weak.
- * Body: { email, password } or { email, password, mobile, otp } when OTP required
+ * Login: find user by email, compare password.
+ * Body: { email, password }
  */
-export async function login(email, password, meta = {}, options = {}) {
+export async function login(email, password, meta = {}) {
   if (!email || !password) {
     const err = new Error('Email and password are required');
     err.status = 400;
     throw err;
-  }
-  const { mobile, otp } = options;
-  if (mobile && otp) {
-    const { verifyOTP } = await import('./otp.service.js');
-    const verified = verifyOTP(mobile, otp, 'login');
-    if (!verified.success) {
-      const err = new Error(verified.message || 'Invalid or expired OTP');
-      err.status = 401;
-      throw err;
-    }
   }
   const normalizedEmail = normalizeEmail(email);
 
