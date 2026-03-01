@@ -11,6 +11,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import path from 'path';
@@ -102,8 +103,17 @@ registerCommunitySocket(io);
 // Middleware
 // ============================================
 
-app.use(helmet());
+// SECURITY UPDATE IMPLEMENTED: Helmet with HSTS, X-Frame-Options, Referrer-Policy
+app.use(
+  helmet({
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  })
+);
 app.set('trust proxy', 1);
+// SECURITY UPDATE IMPLEMENTED: Parse cookies for refresh token
+app.use(cookieParser());
 app.use(cors({
   origin(origin, callback) {
     // Allow non-browser requests (e.g. health checks, curl, server-to-server).
@@ -123,10 +133,10 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Basic in-memory rate limiting to mitigate abuse without extra infra.
+// SECURITY UPDATE IMPLEMENTED: Rate limiting - 100 general per 15 min; auth has stricter limit in auth routes
 const requestBuckets = new Map();
-const RATE_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = 120;
+const RATE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX = 100;
 const AUTH_RATE_LIMIT_MAX = 12;
 
 const getClientIp = (req) => {
@@ -290,7 +300,8 @@ async function start() {
     if (adminEmail && adminPassword) {
       const existingAdmin = await User.findOne({ role: 'admin' }).lean();
       if (!existingAdmin) {
-        const passwordHash = await bcrypt.hash(adminPassword, 10);
+        // SECURITY UPDATE IMPLEMENTED: bcrypt 12 for admin seed
+        const passwordHash = await bcrypt.hash(adminPassword, 12);
         await User.create({
           email: adminEmail,
           passwordHash,

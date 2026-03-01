@@ -22,3 +22,4 @@ export { default as BootcampPayment } from './BootcampPayment.js';
 export { default as Subscription } from './Subscription.js';
 export { default as SiteContent } from './SiteContent.js';
 export { default as SecurityEvent } from './SecurityEvent.js';
+export { default as RefreshToken } from './RefreshToken.js';

@@ -78,6 +78,10 @@ const userSchema = new mongoose.Schema(
     twoFactorTempSecret: { type: String, select: false },
     twoFactorBackupCodes: { type: [String], select: false, default: [] },
     lastLoginAt: Date,
+    // SECURITY UPDATE IMPLEMENTED: Force password update for weak passwords
+    mustChangePassword: { type: Boolean, default: false },
+    // SECURITY UPDATE IMPLEMENTED: Mobile for OTP verification
+    mobile: { type: String, trim: true, default: '' },
   },
   {
     timestamps: true,

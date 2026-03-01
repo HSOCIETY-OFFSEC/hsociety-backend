@@ -1,10 +1,14 @@
 /**
  * Profile Routes
  * Matches frontend API_ENDPOINTS.PROFILE
+ * SECURITY UPDATE IMPLEMENTED: Change password with strong validation, logging
  */
 import { Router } from 'express';
 import { User } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
+import * as authService from '../services/auth.service.js';
+import { SecurityEvent } from '../models/index.js';
+import { validatePasswordStrength } from '../utils/security.js';
 
 const router = Router();
 
@@ -120,6 +124,37 @@ router.delete('/avatar', async (req, res, next) => {
       bio: user.bio || '',
     });
   } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /profile/password - SECURITY UPDATE IMPLEMENTED: Strong password, log change
+router.put('/password', async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current and new password are required' });
+    }
+    const pwdCheck = validatePasswordStrength(newPassword);
+    if (!pwdCheck.valid) {
+      return res.status(400).json({ error: pwdCheck.message });
+    }
+    await authService.changePassword(req.user.id, currentPassword, newPassword);
+    SecurityEvent.create({
+      eventType: 'password_update',
+      action: 'change_password_profile',
+      path: '/profile/password',
+      method: 'PUT',
+      statusCode: 200,
+      ipAddress: req.requestContext?.ipAddress || req.ip || '',
+      userAgent: String(req.headers['user-agent'] || '').slice(0, 512),
+      userId: req.user.id,
+    }).catch(() => {});
+    res.json({ success: true });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 });

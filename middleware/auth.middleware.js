@@ -35,11 +35,12 @@ export async function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  const user = await User.findById(userId).lean();
+  const user = await User.findById(userId).select('+mustChangePassword').lean();
   if (!user) {
     return res.status(401).json({ error: 'User not found' });
   }
 
+  // SECURITY UPDATE IMPLEMENTED: Expose mustChangePassword so routes can enforce
   req.user = {
     id: user._id.toString(),
     email: user.email,
@@ -48,6 +49,7 @@ export async function requireAuth(req, res, next) {
     avatarUrl: user.avatarUrl || '',
     bootcampStatus: user.bootcampStatus || 'not_enrolled',
     bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
+    mustChangePassword: !!user.mustChangePassword,
   };
   next();
 }
@@ -102,6 +104,7 @@ export async function optionalAuth(req, res, next) {
         avatarUrl: user.avatarUrl || '',
         bootcampStatus: user.bootcampStatus || 'not_enrolled',
         bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
+        mustChangePassword: !!user.mustChangePassword,
       };
     }
   } catch {

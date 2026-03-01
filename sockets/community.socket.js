@@ -1,5 +1,6 @@
 /**
  * Community Socket handlers
+ * SECURITY UPDATE IMPLEMENTED: JWT auth (existing), role validation, sanitize messages, rate-limit per user
  */
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
@@ -9,6 +10,22 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const MAX_MESSAGE_LENGTH = 500;
 const MAX_IMAGE_LENGTH = 300000;
 const MAX_COMMENT_LENGTH = 300;
+// SECURITY UPDATE IMPLEMENTED: Rate limit messages per user to prevent spam
+const MESSAGE_RATE_LIMIT = 30; // per minute
+const messageCounts = new Map();
+
+function checkMessageRateLimit(userId) {
+  const now = Date.now();
+  const key = userId;
+  const bucket = messageCounts.get(key);
+  if (!bucket || now - bucket.startedAt > 60000) {
+    messageCounts.set(key, { count: 1, startedAt: now });
+    return true;
+  }
+  if (bucket.count >= MESSAGE_RATE_LIMIT) return false;
+  bucket.count += 1;
+  return true;
+}
 
 const sanitizeMessage = (value) => {
   const raw = String(value || '');
@@ -93,6 +110,8 @@ export const registerCommunitySocket = (io) => {
     socket.on('joinRoom', (room) => {
       const safeRoom = normalizeRoom(room);
       if (!safeRoom) return;
+      // SECURITY UPDATE IMPLEMENTED: Validate room format (alphanumeric/dash only)
+      if (!/^[a-z0-9_-]+$/i.test(safeRoom) || safeRoom.length > 64) return;
       socket.join(safeRoom);
     });
 
@@ -108,6 +127,10 @@ export const registerCommunitySocket = (io) => {
         if (!room) return;
         const userId = socket.data.user?.id;
         if (!userId) return;
+        if (!checkMessageRateLimit(userId)) {
+          socket.emit('error', { message: 'Rate limit exceeded. Please slow down.' });
+          return;
+        }
         const latestUser = await User.findById(userId).select('mutedUntil').lean();
         if (latestUser?.mutedUntil && new Date(latestUser.mutedUntil) > new Date()) {
           return;

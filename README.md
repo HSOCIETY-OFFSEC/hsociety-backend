@@ -4,11 +4,13 @@ Express.js backend for the Hsociety OffSec platform.
 
 ## Setup
 
+Test users have been removed. Use real registration and/or the optional admin seed. See the project root **SETUP.md** for full instructions.
+
 ```bash
-cd server
+cd hsociety-backend
 npm install
 cp .env.example .env
-# Edit .env if needed
+# Set MONGODB_URI, JWT_SECRET (required in production), and optionally admin seed vars
 ```
 
 ## Development

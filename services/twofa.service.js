@@ -201,7 +201,7 @@ export async function verify2FA(twoFactorToken, code) {
   user.lastLoginAt = new Date();
   await user.save({ validateBeforeSave: false });
 
-  const { accessToken, refreshToken, expiresIn } = issueTokens(user._id, user.email, user.role);
+  const { accessToken, refreshToken, expiresIn } = await issueTokens(user._id, user.email, user.role, {});
   return {
     user: toUserResponse(user),
     token: accessToken,
@@ -252,7 +252,7 @@ export async function verifyBackupCode(twoFactorToken, backupCode) {
   user.lastLoginAt = new Date();
   await user.save({ validateBeforeSave: false });
 
-  const { accessToken, refreshToken, expiresIn } = issueTokens(user._id, user.email, user.role);
+  const { accessToken, refreshToken, expiresIn } = await issueTokens(user._id, user.email, user.role, {});
   return {
     user: toUserResponse(user),
     token: accessToken,

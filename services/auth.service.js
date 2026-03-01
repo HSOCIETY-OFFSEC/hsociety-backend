@@ -1,77 +1,24 @@
 /**
  * Auth Service
  * Register, login, token issuance. Uses User model and bcrypt/JWT.
+ * SECURITY UPDATE IMPLEMENTED: Strong passwords, bcrypt 12, refresh token storage, short-lived access
  */
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import RefreshToken from '../models/RefreshToken.js';
+import { validatePasswordStrength } from '../utils/security.js';
 
-const SALT_ROUNDS = 10;
+// SECURITY UPDATE IMPLEMENTED: Salt rounds >= 12 for secure hashing
+const SALT_ROUNDS = 12;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
-const JWT_ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY || '24h';
+// SECURITY UPDATE IMPLEMENTED: Short-lived access token (15-30 min)
+const JWT_ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY || '20m';
 const JWT_REFRESH_EXPIRY = process.env.JWT_REFRESH_EXPIRY || '7d';
 const JWT_2FA_EXPIRY = process.env.JWT_2FA_EXPIRY || '5m';
 
-
-/**Remove these DEV QUICK USERS after testing */
-const DEV_QUICK_USERS = {
-  'test-corp@hsociety.local': {
-    name: 'Test Corporate',
-    role: 'corporate',
-    organization: 'HsOCIETY Labs',
-    bootcampStatus: 'not_enrolled',
-    bootcampPaymentStatus: 'unpaid',
-    password: 'Test123!'
-  },
-  'test-pen@hsociety.local': {
-    name: 'Test Pentester',
-    role: 'pentester',
-    organization: 'HsOCIETY Labs',
-    bootcampStatus: 'not_enrolled',
-    bootcampPaymentStatus: 'unpaid',
-    password: 'Test123!'
-  },
-  'test-stu@hsociety.local': {
-    name: 'Test Student',
-    role: 'student',
-    organization: 'HsOCIETY Labs',
-    bootcampStatus: 'enrolled',
-    bootcampPaymentStatus: 'paid',
-    password: 'Test123!'
-  }
-};
-
-const ENABLE_DEV_QUICK_ACCOUNTS = process.env.ENABLE_DEV_QUICK_ACCOUNTS
-  ? process.env.ENABLE_DEV_QUICK_ACCOUNTS === 'true'
-  : process.env.NODE_ENV !== 'production';
-
 const normalizeEmail = (input) => (typeof input === 'string' ? input.trim().toLowerCase() : '');
-
-const ensureDevQuickAccount = async (email) => {
-  if (!ENABLE_DEV_QUICK_ACCOUNTS) return null;
-  const normalizedEmail = normalizeEmail(email);
-  const entry = DEV_QUICK_USERS[normalizedEmail];
-  if (!entry) return null;
-
-  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
-  if (user) {
-    return user;
-  }
-
-  const passwordHash = await hashPassword(entry.password);
-  user = await User.create({
-    email: normalizedEmail,
-    passwordHash,
-    name: entry.name,
-    organization: entry.organization || '',
-    role: entry.role,
-    bootcampStatus: entry.bootcampStatus,
-    bootcampPaymentStatus: entry.bootcampPaymentStatus,
-  });
-
-  user.passwordHash = passwordHash;
-  return user;
-};
 
 /**
  * Map frontend role to backend User.role
@@ -99,19 +46,36 @@ async function comparePassword(plain, hash) {
 }
 
 /**
- * Issue access and refresh tokens for a user
+ * Hash refresh token for storage (SECURITY UPDATE IMPLEMENTED: store hashed only)
+ */
+function hashRefreshToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * Issue access and refresh tokens for a user.
+ * SECURITY UPDATE IMPLEMENTED: Short access, refresh stored hashed in DB, rotation on use.
  * @returns { accessToken, refreshToken, expiresIn } expiresIn in seconds
  */
-export function issueTokens(userId, email, role) {
+export async function issueTokens(userId, email, role, meta = {}) {
   const payload = { sub: userId, email, role };
   const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_ACCESS_EXPIRY });
   const refreshToken = jwt.sign(
-    { ...payload, type: 'refresh' },
+    { ...payload, type: 'refresh', jti: crypto.randomUUID() },
     JWT_SECRET,
     { expiresIn: JWT_REFRESH_EXPIRY }
   );
   const decoded = jwt.decode(accessToken);
-  const expiresIn = decoded?.exp ? decoded.exp - Math.floor(Date.now() / 1000) : 86400;
+  const expiresIn = decoded?.exp ? decoded.exp - Math.floor(Date.now() / 1000) : 1200;
+  const refreshDecoded = jwt.decode(refreshToken);
+  const expiresAt = refreshDecoded?.exp ? new Date(refreshDecoded.exp * 1000) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await RefreshToken.create({
+    userId,
+    tokenHash: hashRefreshToken(refreshToken),
+    expiresAt,
+    userAgent: meta.userAgent || '',
+    ipAddress: meta.ipAddress || '',
+  });
   return { accessToken, refreshToken, expiresIn };
 }
 
@@ -125,6 +89,7 @@ export function issueTwoFactorToken(userId, email, role) {
 
 /**
  * Build safe user object for response (no passwordHash)
+ * SECURITY UPDATE IMPLEMENTED: Expose mustChangePassword so frontend can force update
  */
 export function toUserResponse(doc) {
   return {
@@ -139,14 +104,16 @@ export function toUserResponse(doc) {
     twoFactorEnabled: !!doc.twoFactorEnabled,
     hackerHandle: doc.hackerHandle || '',
     bio: doc.bio || '',
+    mustChangePassword: !!doc.mustChangePassword,
   };
 }
 
 /**
  * Register: map frontend DTO to User, hash password, create user, return user + tokens.
+ * SECURITY UPDATE IMPLEMENTED: Strong password validation, bcrypt 12, refresh stored in DB.
  * Frontend sends: { role, profile: { fullName, organization }, credentials: { email, password }, consent, metadata }
  */
-export async function register(payload) {
+export async function register(payload, meta = {}) {
   const { role: frontendRole, profile, credentials } = payload || {};
   if (!credentials?.email || !credentials?.password) {
     const err = new Error('Email and password are required');
@@ -155,8 +122,9 @@ export async function register(payload) {
   }
   const email = String(credentials.email).trim().toLowerCase();
   const password = String(credentials.password);
-  if (password.length < 8) {
-    const err = new Error('Password must be at least 8 characters');
+  const pwdCheck = validatePasswordStrength(password);
+  if (!pwdCheck.valid) {
+    const err = new Error(pwdCheck.message);
     err.status = 400;
     throw err;
   }
@@ -180,7 +148,7 @@ export async function register(payload) {
     role,
   });
 
-  const { accessToken, refreshToken, expiresIn } = issueTokens(user._id, user.email, user.role);
+  const { accessToken, refreshToken, expiresIn } = await issueTokens(user._id, user.email, user.role, meta);
   return {
     user: toUserResponse(user),
     token: accessToken,
@@ -190,21 +158,29 @@ export async function register(payload) {
 }
 
 /**
- * Login: find user by email, compare password, update lastLoginAt, return user + tokens.
- * Body: { email, password }
+ * Login: find user by email, compare password, enforce strong password for existing users.
+ * SECURITY UPDATE IMPLEMENTED: Optional mobile OTP verification; force password change if weak.
+ * Body: { email, password } or { email, password, mobile, otp } when OTP required
  */
-export async function login(email, password) {
+export async function login(email, password, meta = {}, options = {}) {
   if (!email || !password) {
     const err = new Error('Email and password are required');
     err.status = 400;
     throw err;
   }
+  const { mobile, otp } = options;
+  if (mobile && otp) {
+    const { verifyOTP } = await import('./otp.service.js');
+    const verified = verifyOTP(mobile, otp, 'login');
+    if (!verified.success) {
+      const err = new Error(verified.message || 'Invalid or expired OTP');
+      err.status = 401;
+      throw err;
+    }
+  }
   const normalizedEmail = normalizeEmail(email);
 
-  let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
-  if (!user) {
-    user = await ensureDevQuickAccount(normalizedEmail);
-  }
+  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +mustChangePassword');
   if (!user) {
     const err = new Error('Invalid email or password');
     err.status = 401;
@@ -218,6 +194,25 @@ export async function login(email, password) {
     throw err;
   }
 
+  // SECURITY UPDATE IMPLEMENTED: Existing users with weak passwords must change before full access
+  const pwdCheck = validatePasswordStrength(password);
+  if (!pwdCheck.valid && !user.mustChangePassword) {
+    await User.updateOne({ _id: user._id }, { $set: { mustChangePassword: true } });
+    user.mustChangePassword = true;
+  }
+  if (user.mustChangePassword) {
+    const passwordChangeToken = jwt.sign(
+      { sub: user._id, email: user.email, type: 'password_change' },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+    return {
+      mustChangePassword: true,
+      passwordChangeToken,
+      user: toUserResponse({ ...user.toObject(), mustChangePassword: true }),
+    };
+  }
+
   if (user.twoFactorEnabled) {
     const twoFactorToken = issueTwoFactorToken(user._id, user.email, user.role);
     return {
@@ -227,7 +222,7 @@ export async function login(email, password) {
     };
   }
 
-  const { accessToken, refreshToken, expiresIn } = issueTokens(user._id, user.email, user.role);
+  const { accessToken, refreshToken, expiresIn } = await issueTokens(user._id, user.email, user.role, meta);
   user.lastLoginAt = new Date();
   await user.save({ validateBeforeSave: false });
   return {
@@ -239,18 +234,19 @@ export async function login(email, password) {
 }
 
 /**
- * Refresh: verify refresh token and issue new access (and optionally refresh) token.
- * Body: { refreshToken }
+ * Refresh: verify refresh token (must exist in DB, not revoked), rotate refresh token.
+ * SECURITY UPDATE IMPLEMENTED: Hashed token in DB, rotate on use, invalidate old.
+ * Body: { refreshToken } or cookie
  */
-export async function refresh(refreshToken) {
-  if (!refreshToken) {
+export async function refresh(refreshTokenValue, meta = {}) {
+  if (!refreshTokenValue) {
     const err = new Error('Refresh token is required');
     err.status = 400;
     throw err;
   }
   let decoded;
   try {
-    decoded = jwt.verify(refreshToken, JWT_SECRET);
+    decoded = jwt.verify(refreshTokenValue, JWT_SECRET);
   } catch {
     const err = new Error('Invalid or expired refresh token');
     err.status = 401;
@@ -261,16 +257,25 @@ export async function refresh(refreshToken) {
     err.status = 401;
     throw err;
   }
+  const tokenHash = hashRefreshToken(refreshTokenValue);
+  const stored = await RefreshToken.findOne({ tokenHash, revoked: false }).lean();
+  if (!stored || new Date(stored.expiresAt) < new Date()) {
+    const err = new Error('Invalid or expired refresh token');
+    err.status = 401;
+    throw err;
+  }
+  await RefreshToken.updateOne({ _id: stored._id }, { $set: { revoked: true } });
   const user = await User.findById(decoded.sub).lean();
   if (!user) {
     const err = new Error('User not found');
     err.status = 401;
     throw err;
   }
-  const { accessToken, refreshToken: newRefreshToken, expiresIn } = issueTokens(
+  const { accessToken, refreshToken: newRefreshToken, expiresIn } = await issueTokens(
     user._id,
     user.email,
-    user.role
+    user.role,
+    meta
   );
   return {
     user: toUserResponse(user),
@@ -280,11 +285,60 @@ export async function refresh(refreshToken) {
   };
 }
 
+/**
+ * Invalidate all refresh tokens for a user (logout). SECURITY UPDATE IMPLEMENTED
+ */
+export async function invalidateRefreshTokensForUser(userId) {
+  await RefreshToken.updateMany({ userId }, { $set: { revoked: true } });
+}
+
+/**
+ * Change password: verify current, validate new strength, hash and save. Clear mustChangePassword.
+ * SECURITY UPDATE IMPLEMENTED
+ */
+export async function changePassword(userId, currentPassword, newPassword) {
+  const user = await User.findById(userId).select('+passwordHash');
+  if (!user) {
+    const err = new Error('User not found');
+    err.status = 404;
+    throw err;
+  }
+  if (currentPassword != null && currentPassword !== '') {
+    const match = await comparePassword(currentPassword, user.passwordHash);
+    if (!match) {
+      const err = new Error('Current password is incorrect');
+      err.status = 401;
+      throw err;
+    }
+  }
+  const pwdCheck = validatePasswordStrength(newPassword);
+  if (!pwdCheck.valid) {
+    const err = new Error(pwdCheck.message);
+    err.status = 400;
+    throw err;
+  }
+  user.passwordHash = await hashPassword(newPassword);
+  user.mustChangePassword = false;
+  await user.save({ validateBeforeSave: false });
+  return { success: true };
+}
+
+export function issuePasswordChangeToken(userId, email) {
+  return jwt.sign(
+    { sub: userId, email, type: 'password_change' },
+    JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+}
+
 export default {
   register,
   login,
   refresh,
   issueTokens,
   issueTwoFactorToken,
+  issuePasswordChangeToken,
   toUserResponse,
+  invalidateRefreshTokensForUser,
+  changePassword,
 };
