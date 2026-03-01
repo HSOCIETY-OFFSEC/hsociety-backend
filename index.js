@@ -53,24 +53,45 @@ if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-secret-change-i
   throw new Error('JWT_SECRET must be set in production');
 }
 
+const normalizeOrigin = (origin = '') => {
+  const cleaned = String(origin).trim().replace(/\/+$/, '');
+  if (!cleaned) return '';
+
+  try {
+    return new URL(cleaned).origin;
+  } catch {
+    return cleaned;
+  }
+};
+
 const parseAllowedOrigins = () => {
   const fromList = (process.env.FRONTEND_URLS || '')
     .split(',')
-    .map(origin => origin.trim())
+    .map(origin => normalizeOrigin(origin))
     .filter(Boolean);
 
-  const fromSingle = process.env.FRONTEND_URL ? [process.env.FRONTEND_URL.trim()] : [];
+  const fromSingle = process.env.FRONTEND_URL ? [normalizeOrigin(process.env.FRONTEND_URL)] : [];
+  const defaults = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'https://hsocietyoffsec.netlify.app'
+  ];
 
-  const defaults = ['http://localhost:5173', 'http://127.0.0.1:5173'];
-
-  return [...new Set([...fromList, ...fromSingle, ...defaults])];
+  return [...new Set([...fromList, ...fromSingle, ...defaults].map(normalizeOrigin).filter(Boolean))];
 };
 
 const allowedOrigins = parseAllowedOrigins();
 const server = http.createServer(app);
 const io = new SocketIOServer(server, {
   cors: {
-    origin: allowedOrigins,
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      const normalizedOrigin = normalizeOrigin(origin);
+      if (allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`Socket.IO CORS blocked for origin: ${origin}`));
+    },
     credentials: true
   }
 });
@@ -87,8 +108,9 @@ app.use(cors({
   origin(origin, callback) {
     // Allow non-browser requests (e.g. health checks, curl, server-to-server).
     if (!origin) return callback(null, true);
+    const normalizedOrigin = normalizeOrigin(origin);
 
-    if (allowedOrigins.includes(origin)) {
+    if (allowedOrigins.includes(normalizedOrigin)) {
       return callback(null, true);
     }
 
