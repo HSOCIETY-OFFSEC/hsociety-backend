@@ -50,7 +50,7 @@ const toMessagePayload = (doc) => ({
   userId: doc.userId?.toString() || '',
   username: doc.username,
   hackerHandle: doc.hackerHandle || '',
-  userRole: doc.userRole || '',
+  userRole: doc.userRole === 'admin' ? 'corporate' : doc.userRole || '',
   userAvatar: doc.userAvatar || '',
   room: doc.room,
   content: doc.content,
@@ -65,7 +65,8 @@ const toMessagePayload = (doc) => ({
     content: comment.content || '',
     createdAt: comment.createdAt
   })),
-  createdAt: doc.createdAt
+  createdAt: doc.createdAt,
+  tempId: doc.tempId || ''
 });
 
 export const registerCommunitySocket = (io) => {
@@ -95,7 +96,7 @@ export const registerCommunitySocket = (io) => {
         id: user._id.toString(),
         username: user.name || 'Community Member',
         hackerHandle: user.hackerHandle || '',
-        role: user.role || '',
+        role: user.role === 'admin' ? 'corporate' : user.role || '',
         avatarUrl: user.avatarUrl || '',
         mutedUntil: user.mutedUntil || null
       };
@@ -154,6 +155,10 @@ export const registerCommunitySocket = (io) => {
         });
 
         const payload = toMessagePayload(messageDoc.toObject());
+        // Echo back the client-provided tempId (if any) so the sender can reconcile optimistic UI.
+        if (data?.tempId) {
+          payload.tempId = String(data.tempId);
+        }
         io.to(room).emit('receiveMessage', payload);
       } catch (err) {
         console.error('[SOCKET] sendMessage error:', err);

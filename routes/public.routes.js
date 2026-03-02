@@ -208,13 +208,13 @@ router.get('/community-profiles', async (req, res, next) => {
     const userIds = messageAgg.map((row) => row._id).filter(Boolean);
     let users = [];
     if (userIds.length) {
-      users = await User.find({ _id: { $in: userIds } })
+      users = await User.find({ _id: { $in: userIds }, role: { $ne: 'admin' } })
         .select('_id name role organization avatarUrl hackerHandle bio createdAt')
         .lean();
     }
 
     if (!users.length) {
-      users = await User.find()
+      users = await User.find({ role: { $ne: 'admin' } })
         .sort({ createdAt: -1 })
         .limit(limit)
         .select('_id name role organization avatarUrl hackerHandle bio createdAt')

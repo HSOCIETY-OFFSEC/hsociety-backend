@@ -317,7 +317,7 @@ router.get('/profile/:handle', requireAuth, async (req, res, next) => {
       user: {
         id: user._id.toString(),
         name: user.name || '',
-        role: user.role || '',
+        role: user.role === 'admin' ? 'corporate' : user.role || '',
         organization: user.organization || '',
         avatarUrl: user.avatarUrl || '',
         hackerHandle: user.hackerHandle || '',
