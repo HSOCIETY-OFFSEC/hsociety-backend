@@ -90,6 +90,16 @@ router.get('/content/landing', async (_req, res, next) => {
   }
 });
 
+// GET /public/content/terms
+router.get('/content/terms', async (_req, res, next) => {
+  try {
+    const content = await getSiteContent();
+    res.json({ terms: content.terms || {} });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /public/blog-posts
 router.get('/blog-posts', async (_req, res, next) => {
   try {

@@ -285,6 +285,20 @@ router.patch('/content', async (req, res, next) => {
         summary: String(post.summary || '').trim(),
       })).filter((post) => post.title && post.summary);
     }
+    if (req.body?.terms && typeof req.body.terms === 'object') {
+      updates['terms.effectiveDate'] = String(req.body.terms.effectiveDate || '').trim();
+      updates['terms.lastUpdated'] = String(req.body.terms.lastUpdated || '').trim();
+      updates['terms.jurisdiction'] = String(req.body.terms.jurisdiction || '').trim();
+      if (Array.isArray(req.body.terms.sections)) {
+        updates['terms.sections'] = req.body.terms.sections.map((section) => ({
+          title: String(section.title || '').trim(),
+          body: String(section.body || '').trim(),
+          bullets: Array.isArray(section.bullets)
+            ? section.bullets.map((item) => String(item || '').trim()).filter(Boolean)
+            : []
+        })).filter((section) => section.title && (section.body || section.bullets?.length));
+      }
+    }
 
     const content = await SiteContent.findOneAndUpdate(
       { key: 'site' },

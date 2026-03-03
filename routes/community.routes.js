@@ -46,11 +46,11 @@ const upload = multer({
 });
 
 const DEFAULT_CHANNELS = [
-  { id: 'intro', name: 'Introductions' },
-  { id: 'beginner', name: 'Beginner Q&A' },
-  { id: 'ctf', name: 'CTF Talk' },
-  { id: 'blue-team', name: 'Blue Team' },
-  { id: 'red-team', name: 'Red Team' },
+  { id: 'intro', name: 'Introductions', emojis: ['👋', '🎉', '🔥', '👏', '💬', '❤️'] },
+  { id: 'beginner', name: 'Beginner Q&A', emojis: ['❓', '✅', '🧠', '💡', '👏', '🔥'] },
+  { id: 'ctf', name: 'CTF Talk', emojis: ['🏁', '🧩', '🧪', '🎯', '🔥', '💯'] },
+  { id: 'blue-team', name: 'Blue Team', emojis: ['🛡️', '🔍', '📡', '✅', '💡', '🔥'] },
+  { id: 'red-team', name: 'Red Team', emojis: ['⚔️', '🕵️', '💥', '🎯', '🔥', '💯'] },
 ];
 
 const DEFAULT_TAGS = [
@@ -81,6 +81,11 @@ const DEFAULT_CHALLENGE_CORP = {
   description: 'See the most active learners and award mentorship credits.',
 };
 
+const DEFAULT_REACTIONS = {
+  maxPerUser: 3,
+  emojis: ['🔥', '💯', '👏', '😂', '😮', '❤️', '✅', '⚡', '🧠', '🎯']
+};
+
 const ensureConfig = async () => {
   let config = await CommunityConfig.findOne().lean();
   if (!config) {
@@ -88,6 +93,7 @@ const ensureConfig = async () => {
       stats: { learners: 12000, questions: 4000, answered: 1300 },
       channels: DEFAULT_CHANNELS,
       tags: DEFAULT_TAGS,
+      reactionConfig: DEFAULT_REACTIONS,
       mentor: DEFAULT_MENTOR,
       challengeStudent: DEFAULT_CHALLENGE_STUDENT,
       challengeCorporate: DEFAULT_CHALLENGE_CORP,
@@ -150,6 +156,7 @@ router.get('/overview', optionalAuth, async (req, res, next) => {
       stats: resolvedStats,
       channels: config.channels?.length ? config.channels : DEFAULT_CHANNELS,
       tags: config.tags?.length ? config.tags : DEFAULT_TAGS,
+      reactionConfig: config.reactionConfig || DEFAULT_REACTIONS,
       posts: posts.map((post) => toPostResponse(post, viewerId)),
       mentor: config.mentor || DEFAULT_MENTOR,
       challenge:
@@ -349,6 +356,17 @@ router.get('/messages', requireAuth, async (req, res, next) => {
       .limit(limit)
       .lean();
 
+    const normalizeReactions = (reactions) => {
+      if (!reactions || typeof reactions !== 'object') return {};
+      return Object.entries(reactions).reduce((acc, [emoji, data]) => {
+        acc[emoji] = {
+          count: Number(data?.count || 0),
+          users: (data?.users || []).map((id) => id.toString())
+        };
+        return acc;
+      }, {});
+    };
+
     res.json({
       room,
       messages: messages.map((message) => ({
@@ -363,6 +381,7 @@ router.get('/messages', requireAuth, async (req, res, next) => {
         imageUrl: message.imageUrl || '',
         likes: Number(message.likes || 0),
         likedBy: (message.likedBy || []).map((id) => id.toString()),
+        reactions: normalizeReactions(message.reactions),
         pinned: Boolean(message.pinned),
         comments: (message.comments || []).map((comment) => ({
           id: comment._id?.toString() || '',

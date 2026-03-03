@@ -24,7 +24,22 @@ const siteContentSchema = new mongoose.Schema(
         ],
         default: []
       }
-    }
+    },
+    terms: {
+      effectiveDate: { type: String, default: '' },
+      lastUpdated: { type: String, default: '' },
+      jurisdiction: { type: String, default: '' },
+      sections: {
+        type: [
+          {
+            title: { type: String, default: '' },
+            body: { type: String, default: '' },
+            bullets: { type: [String], default: [] }
+          }
+        ],
+        default: []
+      }
+    },
   },
   { timestamps: true }
 );

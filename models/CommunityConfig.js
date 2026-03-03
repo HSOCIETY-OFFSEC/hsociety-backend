@@ -7,6 +7,7 @@ const channelSchema = new mongoose.Schema(
   {
     id: { type: String, required: true },
     name: { type: String, required: true },
+    emojis: { type: [String], default: [] },
   },
   { _id: false }
 );
@@ -39,6 +40,10 @@ const communityConfigSchema = new mongoose.Schema(
     },
     channels: { type: [channelSchema], default: [] },
     tags: { type: [String], default: [] },
+    reactionConfig: {
+      maxPerUser: { type: Number, default: 3 },
+      emojis: { type: [String], default: [] },
+    },
     mentor: { type: mentorSchema, default: () => ({}) },
     challengeStudent: { type: challengeSchema, default: () => ({}) },
     challengeCorporate: { type: challengeSchema, default: () => ({}) },

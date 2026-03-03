@@ -5,6 +5,8 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import CommunityMessage from '../models/CommunityMessage.js';
+import CommunityConfig from '../models/CommunityConfig.js';
+import emojiRegex from 'emoji-regex';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const MAX_MESSAGE_LENGTH = 500;
@@ -45,6 +47,34 @@ const isValidImageUrl = (value) => {
   return false;
 };
 
+const DEFAULT_REACTIONS = ['🔥', '💯', '👏', '😂', '😮', '❤️', '✅', '⚡', '🧠', '🎯'];
+const DEFAULT_REACTION_LIMIT = 3;
+
+const normalizeReactions = (reactions) => {
+  if (!reactions) return {};
+  if (reactions instanceof Map) {
+    return Object.fromEntries(
+      Array.from(reactions.entries()).map(([emoji, data]) => [
+        emoji,
+        {
+          count: Number(data?.count || 0),
+          users: (data?.users || []).map((id) => id.toString())
+        }
+      ])
+    );
+  }
+  if (typeof reactions === 'object') {
+    return Object.entries(reactions).reduce((acc, [emoji, data]) => {
+      acc[emoji] = {
+        count: Number(data?.count || 0),
+        users: (data?.users || []).map((id) => id.toString())
+      };
+      return acc;
+    }, {});
+  }
+  return {};
+};
+
 const toMessagePayload = (doc) => ({
   id: doc._id.toString(),
   userId: doc.userId?.toString() || '',
@@ -57,6 +87,7 @@ const toMessagePayload = (doc) => ({
   imageUrl: doc.imageUrl || '',
   likes: Number(doc.likes || 0),
   likedBy: (doc.likedBy || []).map((id) => id.toString()),
+  reactions: normalizeReactions(doc.reactions),
   pinned: Boolean(doc.pinned),
   comments: (doc.comments || []).map((comment) => ({
     id: comment._id?.toString() || '',
@@ -249,6 +280,65 @@ export const registerCommunitySocket = (io) => {
         });
       } catch (err) {
         console.error('[SOCKET] addComment error:', err);
+      }
+    });
+
+    socket.on('reactMessage', async (data) => {
+      try {
+        const messageId = String(data?.messageId || '').trim();
+        if (!messageId) return;
+        const userId = socket.data.user?.id;
+        if (!userId) return;
+        const emoji = String(data?.emoji || '').trim();
+        if (!emoji) return;
+
+        const regex = emojiRegex();
+        const matches = emoji.match(regex);
+        if (!matches || matches.join('') !== emoji) return;
+
+        const message = await CommunityMessage.findById(messageId);
+        if (!message) return;
+
+        const config = await CommunityConfig.findOne().select('reactionConfig channels').lean();
+        const channel = config?.channels?.find((ch) => String(ch.id) === String(message.room));
+        const allowedEmojis =
+          channel?.emojis?.length
+            ? channel.emojis
+            : config?.reactionConfig?.emojis?.length
+              ? config.reactionConfig.emojis
+              : DEFAULT_REACTIONS;
+        if (!allowedEmojis.includes(emoji)) return;
+
+        const reactionLimit = Number(config?.reactionConfig?.maxPerUser || DEFAULT_REACTION_LIMIT);
+        const currentReactions = normalizeReactions(message.reactions);
+        const userReactionCount = Object.values(currentReactions).filter((entry) =>
+          Array.isArray(entry.users) && entry.users.includes(userId)
+        ).length;
+
+        const current = message.reactions?.get(emoji) || { count: 0, users: [] };
+        const users = Array.isArray(current.users) ? [...current.users] : [];
+        const alreadyReacted = users.some((id) => id.toString() === userId);
+        if (!alreadyReacted && userReactionCount >= reactionLimit) return;
+        const nextUsers = alreadyReacted
+          ? users.filter((id) => id.toString() !== userId)
+          : [...users, userId];
+        const nextCount = Math.max(0, Number(current.count || 0) + (alreadyReacted ? -1 : 1));
+
+        if (nextCount === 0) {
+          message.reactions?.delete(emoji);
+        } else {
+          message.reactions?.set(emoji, { count: nextCount, users: nextUsers });
+        }
+        message.markModified('reactions');
+        await message.save();
+
+        io.to(message.room).emit('messageReacted', {
+          messageId: message._id.toString(),
+          room: message.room,
+          reactions: normalizeReactions(message.reactions)
+        });
+      } catch (err) {
+        console.error('[SOCKET] reactMessage error:', err);
       }
     });
   });
