@@ -338,6 +338,58 @@ router.patch('/content', async (req, res, next) => {
         updates['learn.bootcampMeetingMessage'] = String(req.body.learn.bootcampMeetingMessage || '').trim();
       }
     }
+    if (req.body?.team && typeof req.body.team === 'object') {
+      const team = req.body.team;
+      if (team.hero && typeof team.hero === 'object') {
+        updates['team.hero.kicker'] = String(team.hero.kicker || '').trim();
+        updates['team.hero.title'] = String(team.hero.title || '').trim();
+        updates['team.hero.subtitle'] = String(team.hero.subtitle || '').trim();
+        updates['team.hero.button'] = String(team.hero.button || '').trim();
+        updates['team.hero.route'] = String(team.hero.route || '').trim();
+      }
+      if (team.leadership && typeof team.leadership === 'object') {
+        updates['team.leadership.title'] = String(team.leadership.title || '').trim();
+        updates['team.leadership.subtitle'] = String(team.leadership.subtitle || '').trim();
+        if (Array.isArray(team.leadership.members)) {
+          updates['team.leadership.members'] = team.leadership.members
+            .map((member) => ({
+              name: String(member?.name || '').trim(),
+              role: String(member?.role || '').trim(),
+              focus: String(member?.focus || '').trim(),
+              icon: String(member?.icon || '').trim(),
+              image: String(member?.image || '').trim(),
+              socials: Array.isArray(member?.socials)
+                ? member.socials
+                    .map((social) => ({
+                      platform: String(social?.platform || '').trim(),
+                      url: String(social?.url || '').trim(),
+                    }))
+                    .filter((social) => social.platform && social.url)
+                : []
+            }))
+            .filter((member) => member.name);
+        }
+      }
+      if (team.groups && typeof team.groups === 'object') {
+        updates['team.groups.title'] = String(team.groups.title || '').trim();
+        updates['team.groups.subtitle'] = String(team.groups.subtitle || '').trim();
+        if (Array.isArray(team.groups.items)) {
+          updates['team.groups.items'] = team.groups.items
+            .map((item) => ({
+              title: String(item?.title || '').trim(),
+              description: String(item?.description || '').trim(),
+              icon: String(item?.icon || '').trim(),
+            }))
+            .filter((item) => item.title && item.description);
+        }
+      }
+      if (team.cta && typeof team.cta === 'object') {
+        updates['team.cta.title'] = String(team.cta.title || '').trim();
+        updates['team.cta.subtitle'] = String(team.cta.subtitle || '').trim();
+        updates['team.cta.button'] = String(team.cta.button || '').trim();
+        updates['team.cta.route'] = String(team.cta.route || '').trim();
+      }
+    }
 
     const content = await SiteContent.findOneAndUpdate(
       { key: 'site' },

@@ -57,6 +57,60 @@ const siteContentSchema = new mongoose.Schema(
       bootcampMeetingMessage: { type: String, default: '' },
       bootcampMeetingUpdatedAt: { type: Date, default: null },
     },
+    team: {
+      hero: {
+        kicker: { type: String, default: '' },
+        title: { type: String, default: '' },
+        subtitle: { type: String, default: '' },
+        button: { type: String, default: '' },
+        route: { type: String, default: '' },
+      },
+      leadership: {
+        title: { type: String, default: '' },
+        subtitle: { type: String, default: '' },
+        members: {
+          type: [
+            {
+              name: { type: String, default: '' },
+              role: { type: String, default: '' },
+              focus: { type: String, default: '' },
+              icon: { type: String, default: '' },
+              image: { type: String, default: '' },
+              socials: {
+                type: [
+                  {
+                    platform: { type: String, default: '' },
+                    url: { type: String, default: '' },
+                  }
+                ],
+                default: []
+              },
+            }
+          ],
+          default: []
+        }
+      },
+      groups: {
+        title: { type: String, default: '' },
+        subtitle: { type: String, default: '' },
+        items: {
+          type: [
+            {
+              title: { type: String, default: '' },
+              description: { type: String, default: '' },
+              icon: { type: String, default: '' },
+            }
+          ],
+          default: []
+        }
+      },
+      cta: {
+        title: { type: String, default: '' },
+        subtitle: { type: String, default: '' },
+        button: { type: String, default: '' },
+        route: { type: String, default: '' },
+      },
+    },
   },
   { timestamps: true }
 );
