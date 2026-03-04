@@ -3,7 +3,18 @@
  * No auth required
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, CommunityMessage, Pentest, SecurityEvent, SiteContent, Subscription, User } from '../models/index.js';
+import {
+  Audit,
+  CommunityConfig,
+  CommunityMessage,
+  CommunityPost,
+  Pentest,
+  SecurityEvent,
+  SiteContent,
+  StudentProfile,
+  Subscription,
+  User,
+} from '../models/index.js';
 import { optionalAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
@@ -19,6 +30,43 @@ const averageRemediationRate = (audits = []) => {
   if (!audits.length) return 0;
   const total = audits.reduce((acc, audit) => acc + Number(audit.remediationProgress || 0), 0);
   return Math.round(total / audits.length);
+};
+
+const getDateKey = (value = new Date()) => {
+  const date = new Date(value);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const computeStreak = (dateKeys = []) => {
+  if (!Array.isArray(dateKeys) || !dateKeys.length) return 0;
+  const sorted = [...new Set(dateKeys)]
+    .map((item) => new Date(`${item}T00:00:00.000Z`))
+    .sort((a, b) => b.getTime() - a.getTime());
+  if (!sorted.length) return 0;
+
+  const today = new Date(`${getDateKey()}T00:00:00.000Z`);
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const first = sorted[0].getTime();
+  if (first !== today.getTime() && first !== yesterday.getTime()) return 0;
+
+  let streak = 1;
+  for (let i = 1; i < sorted.length; i += 1) {
+    const diff = sorted[i - 1].getTime() - sorted[i].getTime();
+    if (diff === 24 * 60 * 60 * 1000) streak += 1;
+    else break;
+  }
+  return streak;
+};
+
+const resolveRank = (xp) => {
+  if (xp >= 1500) return 'Vanguard';
+  if (xp >= 900) return 'Architect';
+  if (xp >= 450) return 'Specialist';
+  if (xp >= 150) return 'Contributor';
+  return 'Candidate';
 };
 
 // GET /public/landing-stats
@@ -242,24 +290,89 @@ router.get('/community-profiles', async (req, res, next) => {
       ])
     );
 
+    const userIdsForQuery = users.map((user) => user._id);
+    const [postAgg, messageLikesGivenAgg, postLikesGivenAgg, profiles] = await Promise.all([
+      CommunityPost.aggregate([
+        {
+          $group: {
+            _id: '$metadata.authorId',
+            posts: { $sum: 1 },
+          }
+        }
+      ]),
+      CommunityMessage.aggregate([
+        { $unwind: '$likedBy' },
+        {
+          $group: {
+            _id: '$likedBy',
+            likesGiven: { $sum: 1 },
+          }
+        }
+      ]),
+      CommunityPost.aggregate([
+        { $unwind: '$likedBy' },
+        {
+          $group: {
+            _id: '$likedBy',
+            likesGiven: { $sum: 1 },
+          }
+        }
+      ]),
+      StudentProfile.find({ userId: { $in: userIdsForQuery } }).select('userId snapshot.activity.visitDates').lean(),
+    ]);
+
+    const postsMap = new Map(
+      postAgg.map((row) => [String(row._id || ''), Number(row.posts || 0)])
+    );
+    const messageLikesGivenMap = new Map(
+      messageLikesGivenAgg.map((row) => [String(row._id || ''), Number(row.likesGiven || 0)])
+    );
+    const postLikesGivenMap = new Map(
+      postLikesGivenAgg.map((row) => [String(row._id || ''), Number(row.likesGiven || 0)])
+    );
+    const profileMap = new Map(profiles.map((item) => [String(item.userId || ''), item]));
+
     const payload = users.map((user) => {
+      const userId = user._id.toString();
       const stats = statsMap.get(String(user._id)) || {
         messages: 0,
         likesReceived: 0,
         imagesShared: 0,
       };
+      const posts = postsMap.get(userId) || 0;
+      const likesGiven = (messageLikesGivenMap.get(userId) || 0) + (postLikesGivenMap.get(userId) || 0);
+      const commentsMade = commentsMap.get(String(user._id)) || 0;
+      const profile = profileMap.get(userId);
+      const visitDates = Array.isArray(profile?.snapshot?.activity?.visitDates)
+        ? profile.snapshot.activity.visitDates
+        : [];
+      const visits = visitDates.length;
+      const streakDays = computeStreak(visitDates);
+      const totalXp =
+        Number(stats.messages || 0) * 5 +
+        Number(posts || 0) * 8 +
+        Number(likesGiven || 0) * 2 +
+        Number(commentsMade || 0) * 3 +
+        Number(visits || 0);
+
       return {
-        id: user._id.toString(),
+        id: userId,
         name: user.name || 'Community Member',
         role: user.role || 'member',
         organization: user.organization || '',
         avatarUrl: user.avatarUrl || '',
         hackerHandle: user.hackerHandle || '',
         bio: user.bio || '',
+        xpSummary: {
+          totalXp,
+          rank: resolveRank(totalXp),
+          streakDays,
+          visits,
+        },
         stats: {
           messages: stats.messages,
           likesReceived: stats.likesReceived,
-          commentsMade: commentsMap.get(String(user._id)) || 0,
+          commentsMade,
           imagesShared: stats.imagesShared,
         }
       };
