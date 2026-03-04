@@ -9,6 +9,9 @@ import {
   StudentCourse,
   StudentProfile,
   CommunityConfig,
+  CommunityMessage,
+  CommunityPost,
+  SiteContent,
   User,
   BootcampPayment,
 } from '../models/index.js';
@@ -160,6 +163,112 @@ const mapPaymentMethodToChannels = (method) => {
     default:
       return ['card', 'bank_transfer', 'mobile_money'];
   }
+};
+
+const getDateKey = (value = new Date()) => {
+  const date = new Date(value);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const computeStreak = (dateKeys = []) => {
+  if (!Array.isArray(dateKeys) || dateKeys.length === 0) return 0;
+  const sorted = [...new Set(dateKeys)]
+    .map((item) => new Date(`${item}T00:00:00.000Z`))
+    .sort((a, b) => b.getTime() - a.getTime());
+
+  if (!sorted.length) return 0;
+  const today = new Date(`${getDateKey()}T00:00:00.000Z`);
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const first = sorted[0].getTime();
+  if (first !== today.getTime() && first !== yesterday.getTime()) return 0;
+
+  let streak = 1;
+  for (let i = 1; i < sorted.length; i += 1) {
+    const prev = sorted[i - 1];
+    const current = sorted[i];
+    if (prev.getTime() - current.getTime() === 24 * 60 * 60 * 1000) {
+      streak += 1;
+    } else {
+      break;
+    }
+  }
+  return streak;
+};
+
+const resolveRank = (xp) => {
+  if (xp >= 1500) return 'Vanguard';
+  if (xp >= 900) return 'Architect';
+  if (xp >= 450) return 'Specialist';
+  if (xp >= 150) return 'Contributor';
+  return 'Candidate';
+};
+
+const buildXpSummary = async (userId, visitDates = []) => {
+  const [messagesCount, postsCount, messageLikesGiven, postLikesGiven, commentCount] = await Promise.all([
+    CommunityMessage.countDocuments({ userId }),
+    CommunityPost.countDocuments({ 'metadata.authorId': String(userId) }),
+    CommunityMessage.countDocuments({ likedBy: userId }),
+    CommunityPost.countDocuments({ likedBy: userId }),
+    CommunityMessage.countDocuments({ 'comments.userId': userId }),
+  ]);
+
+  const likesGiven = Number(messageLikesGiven || 0) + Number(postLikesGiven || 0);
+  const visits = Array.isArray(visitDates) ? visitDates.length : 0;
+  const streakDays = computeStreak(visitDates);
+
+  const totalXp =
+    Number(messagesCount || 0) * 5 +
+    Number(postsCount || 0) * 8 +
+    likesGiven * 2 +
+    Number(commentCount || 0) * 3 +
+    visits;
+
+  return {
+    totalXp,
+    rank: resolveRank(totalXp),
+    streakDays,
+    visits,
+    breakdown: {
+      messages: Number(messagesCount || 0),
+      posts: Number(postsCount || 0),
+      likesGiven,
+      comments: Number(commentCount || 0),
+      visits,
+    },
+  };
+};
+
+const upsertVisitAndGetSummary = async (userId) => {
+  const todayKey = getDateKey();
+  const profile = await StudentProfile.findOne({ userId });
+  const snapshot = profile?.snapshot && typeof profile.snapshot === 'object' ? profile.snapshot : {};
+  const activity = snapshot.activity && typeof snapshot.activity === 'object' ? snapshot.activity : {};
+  const visitDates = Array.isArray(activity.visitDates) ? activity.visitDates.filter(Boolean) : [];
+
+  if (!visitDates.includes(todayKey)) {
+    visitDates.push(todayKey);
+  }
+
+  const trimmedVisitDates = visitDates.slice(-120);
+  const updatedSnapshot = {
+    ...snapshot,
+    activity: {
+      ...activity,
+      visitDates: trimmedVisitDates,
+      lastVisitAt: new Date().toISOString(),
+    },
+  };
+
+  await StudentProfile.findOneAndUpdate(
+    { userId },
+    { $set: { snapshot: updatedSnapshot } },
+    { upsert: true, new: true }
+  );
+
+  return buildXpSummary(userId, trimmedVisitDates);
 };
 
 const requireBootcampRegistration = async (req, res, next) => {
@@ -339,6 +448,7 @@ router.get('/overview', async (req, res, next) => {
     const stats = communityConfig?.stats || {};
     const channels = communityConfig?.channels || [];
     const user = await User.findById(req.user.id).select('bootcampStatus bootcampPaymentStatus').lean();
+    const xpSummary = await upsertVisitAndGetSummary(req.user.id);
     const isRegistered = user?.bootcampStatus !== 'not_enrolled';
     let overview = { learningPath: [], modules: [], snapshot: [] };
 
@@ -354,6 +464,7 @@ router.get('/overview', async (req, res, next) => {
       snapshot: overview.snapshot || [],
       bootcampStatus: user?.bootcampStatus || 'not_enrolled',
       bootcampPaymentStatus: user?.bootcampPaymentStatus || 'unpaid',
+      xpSummary,
       communityStats: {
         questions: Number(stats.questions || 0),
         answered: Number(stats.answered || 0),
@@ -605,6 +716,41 @@ router.get('/course/progress', requireBootcampRegistration, async (req, res, nex
       overall: overview.snapshot?.find((item) => item.id === 'progress')?.value || '0%',
       modules: overview.modules || [],
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /student/learn/resources/free
+router.get('/learn/resources/free', async (_req, res, next) => {
+  try {
+    const content = await SiteContent.findOne({ key: 'site' }).select('learn').lean();
+    const resources = Array.isArray(content?.learn?.freeResources)
+      ? content.learn.freeResources
+      : [];
+
+    res.json({
+      items: resources.map((item, index) => ({
+        id: String(index + 1),
+        title: item.title || 'Untitled resource',
+        description: item.description || '',
+        url: item.url || '',
+        type: item.type || 'link',
+      })),
+      message: content?.learn?.freeResourcesMessage || 'We do not have free resources yet.',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /student/xp-summary
+router.get('/xp-summary', async (req, res, next) => {
+  try {
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const visitDates = profile?.snapshot?.activity?.visitDates || [];
+    const xpSummary = await buildXpSummary(req.user.id, visitDates);
+    res.json(xpSummary);
   } catch (err) {
     next(err);
   }

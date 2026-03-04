@@ -5,7 +5,7 @@
 import Joi from 'joi';
 
 const loginSchema = Joi.object({
-  email: Joi.string().email().trim().lowercase().max(254).required(),
+  email: Joi.string().trim().max(254).required(),
   password: Joi.string().min(1).max(1024).required(),
 }).unknown(false);
 
@@ -40,4 +40,3 @@ export function validateRegister(req, res, next) {
   req.body = value;
   next();
 }
-

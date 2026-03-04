@@ -166,9 +166,17 @@ export async function login(email, password, meta = {}) {
     err.status = 400;
     throw err;
   }
-  const normalizedEmail = normalizeEmail(email);
+  const rawIdentity = String(email || '').trim();
+  const normalizedEmail = normalizeEmail(rawIdentity);
+  const identityRegex = new RegExp(`^${rawIdentity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
-  const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash +mustChangePassword');
+  const user = await User.findOne({
+    $or: [
+      { email: normalizedEmail },
+      { name: identityRegex },
+      { hackerHandle: identityRegex },
+    ]
+  }).select('+passwordHash +mustChangePassword');
   if (!user) {
     const err = new Error('Invalid email or password');
     err.status = 401;

@@ -9,7 +9,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
-import { CommunityConfig, CommunityMessage, CommunityPost, User } from '../models/index.js';
+import { CommunityConfig, CommunityMessage, CommunityPost, StudentProfile, User } from '../models/index.js';
 import { optionalAuth, requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
@@ -84,6 +84,51 @@ const DEFAULT_CHALLENGE_CORP = {
 const DEFAULT_REACTIONS = {
   maxPerUser: 3,
   emojis: ['🔥', '💯', '👏', '😂', '😮', '❤️', '✅', '⚡', '🧠', '🎯']
+};
+
+const getDateKey = (value = new Date()) => {
+  const date = new Date(value);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const computeStreak = (dateKeys = []) => {
+  if (!Array.isArray(dateKeys) || !dateKeys.length) return 0;
+  const sorted = [...new Set(dateKeys)]
+    .map((item) => new Date(`${item}T00:00:00.000Z`))
+    .sort((a, b) => b.getTime() - a.getTime());
+  if (!sorted.length) return 0;
+
+  const today = new Date(`${getDateKey()}T00:00:00.000Z`);
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const first = sorted[0].getTime();
+  if (first !== today.getTime() && first !== yesterday.getTime()) return 0;
+
+  let streak = 1;
+  for (let i = 1; i < sorted.length; i += 1) {
+    const diff = sorted[i - 1].getTime() - sorted[i].getTime();
+    if (diff === 24 * 60 * 60 * 1000) streak += 1;
+    else break;
+  }
+  return streak;
+};
+
+const resolveRank = (xp) => {
+  if (xp >= 1500) return 'Vanguard';
+  if (xp >= 900) return 'Architect';
+  if (xp >= 450) return 'Specialist';
+  if (xp >= 150) return 'Contributor';
+  return 'Candidate';
+};
+
+const getUnlockedEmblems = (progressState = {}) => {
+  const modules = progressState?.modules || {};
+  return Object.entries(modules)
+    .filter(([, value]) => Boolean(value?.ctfCompleted))
+    .map(([moduleId]) => Number(moduleId))
+    .sort((a, b) => a - b);
 };
 
 const ensureConfig = async () => {
@@ -207,7 +252,10 @@ router.post('/posts', requireAuth, async (req, res, next) => {
       visibility: req.body?.visibility || 'public',
       roleContext: req.body?.roleContext || 'student',
       attachments: req.body?.attachments || [],
-      metadata: req.body?.metadata || {},
+      metadata: {
+        ...(req.body?.metadata || {}),
+        authorId: req.user.id,
+      },
     });
 
     res.status(201).json(toPostResponse(doc.toObject(), req.user?.id));
@@ -302,7 +350,7 @@ router.get('/profile/:handle', requireAuth, async (req, res, next) => {
 
     const userId = user._id;
 
-    const [messagesCount, likesAgg, commentsMadeAgg, imagesCount, rooms] = await Promise.all([
+    const [messagesCount, likesAgg, commentsMadeAgg, imagesCount, rooms, postsCount, profile, messageLikesGiven, postLikesGiven] = await Promise.all([
       CommunityMessage.countDocuments({ userId }),
       CommunityMessage.aggregate([
         { $match: { userId } },
@@ -315,10 +363,26 @@ router.get('/profile/:handle', requireAuth, async (req, res, next) => {
       ]),
       CommunityMessage.countDocuments({ userId, imageUrl: { $ne: '' } }),
       CommunityMessage.distinct('room', { userId }),
+      CommunityPost.countDocuments({ 'metadata.authorId': String(userId) }),
+      StudentProfile.findOne({ userId }).lean(),
+      CommunityMessage.countDocuments({ likedBy: userId }),
+      CommunityPost.countDocuments({ likedBy: userId }),
     ]);
 
     const likesReceived = likesAgg?.[0]?.total || 0;
     const commentsMade = commentsMadeAgg?.[0]?.total || 0;
+    const snapshot = profile?.snapshot && typeof profile.snapshot === 'object' ? profile.snapshot : {};
+    const visitDates = Array.isArray(snapshot?.activity?.visitDates) ? snapshot.activity.visitDates : [];
+    const visits = visitDates.length;
+    const streakDays = computeStreak(visitDates);
+    const likesGiven = Number(messageLikesGiven || 0) + Number(postLikesGiven || 0);
+    const totalXp =
+      Number(messagesCount || 0) * 5 +
+      Number(postsCount || 0) * 8 +
+      likesGiven * 2 +
+      Number(commentsMade || 0) * 3 +
+      visits;
+    const unlockedModules = getUnlockedEmblems(snapshot?.progressState || {});
 
     res.json({
       user: {
@@ -337,6 +401,16 @@ router.get('/profile/:handle', requireAuth, async (req, res, next) => {
         commentsMade,
         imagesShared: imagesCount || 0,
         roomsActive: rooms?.length || 0
+      },
+      xpSummary: {
+        totalXp,
+        rank: resolveRank(totalXp),
+        streakDays,
+        visits,
+      },
+      emblems: {
+        unlockedModules,
+        graduationUnlocked: unlockedModules.length >= 5,
       }
     });
   } catch (err) {

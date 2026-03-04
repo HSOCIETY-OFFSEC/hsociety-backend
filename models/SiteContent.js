@@ -40,6 +40,23 @@ const siteContentSchema = new mongoose.Schema(
         default: []
       }
     },
+    learn: {
+      freeResources: {
+        type: [
+          {
+            title: { type: String, default: '' },
+            description: { type: String, default: '' },
+            url: { type: String, default: '' },
+            type: { type: String, default: 'link' },
+          }
+        ],
+        default: []
+      },
+      freeResourcesMessage: { type: String, default: 'We do not have free resources yet.' },
+      bootcampMeetingUrl: { type: String, default: '' },
+      bootcampMeetingMessage: { type: String, default: '' },
+      bootcampMeetingUpdatedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true }
 );

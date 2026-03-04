@@ -437,6 +437,47 @@ async function start() {
       }
     }
 
+    // Optional paid student seed for workspace demo/testing (disabled by default)
+    const seedPaidStudentEnabled = String(process.env.SEED_PAID_STUDENT || 'false').toLowerCase() === 'true';
+    const paidStudentName = (process.env.SEED_PAID_STUDENT_NAME || 'h4ck3r10').trim();
+    const paidStudentPassword = process.env.SEED_PAID_STUDENT_PASSWORD || 'test School';
+    const paidStudentEmail = (
+      process.env.SEED_PAID_STUDENT_EMAIL ||
+      `${paidStudentName || 'h4ck3r10'}@hsociety.local`
+    )
+      .trim()
+      .toLowerCase();
+
+    if (seedPaidStudentEnabled && paidStudentEmail && paidStudentPassword) {
+      const existingPaidStudent = await User.findOne({ email: paidStudentEmail });
+      const paidStudentPasswordHash = await bcrypt.hash(paidStudentPassword, 12);
+
+      if (!existingPaidStudent) {
+        await User.create({
+          email: paidStudentEmail,
+          passwordHash: paidStudentPasswordHash,
+          name: paidStudentName || 'h4ck3r10',
+          organization: 'School',
+          role: 'student',
+          emailVerified: true,
+          bootcampStatus: 'enrolled',
+          bootcampPaymentStatus: 'paid',
+          bootcampPaidAt: new Date(),
+        });
+        console.log(`[HSOCIETY] Seeded paid student user: ${paidStudentEmail}`);
+      } else {
+        existingPaidStudent.name = paidStudentName || existingPaidStudent.name || 'h4ck3r10';
+        existingPaidStudent.passwordHash = paidStudentPasswordHash;
+        existingPaidStudent.role = 'student';
+        existingPaidStudent.emailVerified = true;
+        existingPaidStudent.bootcampStatus = 'enrolled';
+        existingPaidStudent.bootcampPaymentStatus = 'paid';
+        existingPaidStudent.bootcampPaidAt = existingPaidStudent.bootcampPaidAt || new Date();
+        await existingPaidStudent.save({ validateBeforeSave: false });
+        console.log(`[HSOCIETY] Updated paid student user: ${paidStudentEmail}`);
+      }
+    }
+
     server.listen(PORT, () => {
       console.log(`[HSOCIETY] API server running at http://localhost:${PORT}${API_PREFIX}`);
     });

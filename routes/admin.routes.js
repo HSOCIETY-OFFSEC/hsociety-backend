@@ -2,7 +2,7 @@
  * Admin Routes
  */
 import { Router } from 'express';
-import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Pentest, SecurityEvent, SiteContent, User } from '../models/index.js';
+import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Notification, Pentest, SecurityEvent, SiteContent, User } from '../models/index.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
 import {
   approvePaidPentest,
@@ -23,9 +23,16 @@ const toUserResponse = (user) => ({
   role: user.role,
   organization: user.organization || '',
   bootcampStatus: user.bootcampStatus || 'not_enrolled',
+  bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
   mutedUntil: user.mutedUntil || null,
   createdAt: user.createdAt,
 });
+
+const resolveAudienceRoles = (audience = 'all') => {
+  if (audience === 'students') return ['student'];
+  if (audience === 'organizers') return ['admin', 'corporate', 'pentester'];
+  return ['student', 'admin', 'corporate', 'pentester'];
+};
 
 // GET /admin/users
 router.get('/users', async (_req, res, next) => {
@@ -54,6 +61,17 @@ router.patch('/users/:id', async (req, res, next) => {
       ['not_enrolled', 'enrolled', 'completed'].includes(req.body.bootcampStatus)
     ) {
       updates.bootcampStatus = req.body.bootcampStatus;
+    }
+    if (
+      req.body?.bootcampPaymentStatus &&
+      ['unpaid', 'pending', 'paid'].includes(req.body.bootcampPaymentStatus)
+    ) {
+      updates.bootcampPaymentStatus = req.body.bootcampPaymentStatus;
+      if (req.body.bootcampPaymentStatus === 'paid') {
+        updates.bootcampPaidAt = new Date();
+      } else if (req.body.bootcampPaymentStatus === 'unpaid') {
+        updates.bootcampPaidAt = null;
+      }
     }
 
     const user = await User.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true }).lean();
@@ -299,6 +317,27 @@ router.patch('/content', async (req, res, next) => {
         })).filter((section) => section.title && (section.body || section.bullets?.length));
       }
     }
+    if (req.body?.learn && typeof req.body.learn === 'object') {
+      if (Array.isArray(req.body.learn.freeResources)) {
+        updates['learn.freeResources'] = req.body.learn.freeResources
+          .map((item) => ({
+            title: String(item?.title || '').trim(),
+            description: String(item?.description || '').trim(),
+            url: String(item?.url || '').trim(),
+            type: String(item?.type || 'link').trim() || 'link',
+          }))
+          .filter((item) => item.title);
+      }
+      if (req.body.learn.freeResourcesMessage !== undefined) {
+        updates['learn.freeResourcesMessage'] = String(req.body.learn.freeResourcesMessage || '').trim();
+      }
+      if (req.body.learn.bootcampMeetingUrl !== undefined) {
+        updates['learn.bootcampMeetingUrl'] = String(req.body.learn.bootcampMeetingUrl || '').trim();
+      }
+      if (req.body.learn.bootcampMeetingMessage !== undefined) {
+        updates['learn.bootcampMeetingMessage'] = String(req.body.learn.bootcampMeetingMessage || '').trim();
+      }
+    }
 
     const content = await SiteContent.findOneAndUpdate(
       { key: 'site' },
@@ -306,6 +345,84 @@ router.patch('/content', async (req, res, next) => {
       { new: true, upsert: true }
     ).lean();
     res.json(content || {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /admin/notifications/send
+router.post('/notifications/send', async (req, res, next) => {
+  try {
+    const title = String(req.body?.title || '').trim();
+    const message = String(req.body?.message || '').trim();
+    const audience = String(req.body?.audience || 'all').trim().toLowerCase();
+    const type = String(req.body?.type || 'admin_message').trim();
+    const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
+
+    if (!title) return res.status(400).json({ error: 'Title is required' });
+    if (!message) return res.status(400).json({ error: 'Message is required' });
+
+    const roles = resolveAudienceRoles(audience);
+    const users = await User.find({ role: { $in: roles } }).select('_id').lean();
+    if (!users.length) {
+      return res.json({ success: true, sentCount: 0 });
+    }
+
+    await Notification.insertMany(
+      users.map((user) => ({
+        userId: user._id,
+        type,
+        title,
+        message,
+        metadata,
+      }))
+    );
+
+    res.json({ success: true, sentCount: users.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /admin/bootcamp/meeting
+router.post('/bootcamp/meeting', async (req, res, next) => {
+  try {
+    const meetUrl = String(req.body?.meetUrl || '').trim();
+    const meetingMessage = String(req.body?.message || '').trim();
+    const audience = String(req.body?.audience || 'students').trim().toLowerCase();
+
+    if (!meetUrl) return res.status(400).json({ error: 'Google Meet URL is required' });
+
+    const safeMessage =
+      meetingMessage || 'New live bootcamp meeting has been scheduled. Open this alert to join.';
+
+    await SiteContent.findOneAndUpdate(
+      { key: 'site' },
+      {
+        $set: {
+          'learn.bootcampMeetingUrl': meetUrl,
+          'learn.bootcampMeetingMessage': safeMessage,
+          'learn.bootcampMeetingUpdatedAt': new Date(),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    const roles = resolveAudienceRoles(audience);
+    const users = await User.find({ role: { $in: roles } }).select('_id').lean();
+    if (users.length) {
+      await Notification.insertMany(
+        users.map((user) => ({
+          userId: user._id,
+          type: 'bootcamp_meeting',
+          title: 'Bootcamp Live Session',
+          message: safeMessage,
+          metadata: { meetUrl, audience },
+        }))
+      );
+    }
+
+    res.json({ success: true, sentCount: users.length, meetUrl });
   } catch (err) {
     next(err);
   }
