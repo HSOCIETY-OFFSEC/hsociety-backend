@@ -2,6 +2,7 @@
  * Public Routes
  * No auth required
  */
+import mongoose from 'mongoose';
 import { Router } from 'express';
 import {
   Audit,
@@ -389,6 +390,157 @@ router.get('/community-profiles', async (req, res, next) => {
     });
 
     res.json({ profiles: payload });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /public/leaderboard
+router.get('/leaderboard', async (req, res, next) => {
+  try {
+    const limitRaw = Number(req.query.limit || 25);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 25;
+
+    const [
+      messageAgg,
+      postAgg,
+      commentAgg,
+      messageLikesGivenAgg,
+      postLikesGivenAgg,
+      profiles,
+    ] = await Promise.all([
+      CommunityMessage.aggregate([
+        {
+          $group: {
+            _id: '$userId',
+            messages: { $sum: 1 },
+          }
+        }
+      ]),
+      CommunityPost.aggregate([
+        {
+          $group: {
+            _id: '$metadata.authorId',
+            posts: { $sum: 1 },
+          }
+        }
+      ]),
+      CommunityMessage.aggregate([
+        { $unwind: '$comments' },
+        {
+          $group: {
+            _id: '$comments.userId',
+            comments: { $sum: 1 }
+          }
+        }
+      ]),
+      CommunityMessage.aggregate([
+        { $unwind: '$likedBy' },
+        {
+          $group: {
+            _id: '$likedBy',
+            likesGiven: { $sum: 1 },
+          }
+        }
+      ]),
+      CommunityPost.aggregate([
+        { $unwind: '$likedBy' },
+        {
+          $group: {
+            _id: '$likedBy',
+            likesGiven: { $sum: 1 },
+          }
+        }
+      ]),
+      StudentProfile.find()
+        .select('userId snapshot.activity.visitDates')
+        .lean(),
+    ]);
+
+    const messagesMap = new Map(
+      messageAgg.map((row) => [String(row._id || ''), Number(row.messages || 0)])
+    );
+    const postsMap = new Map(
+      postAgg.map((row) => [String(row._id || ''), Number(row.posts || 0)])
+    );
+    const commentsMap = new Map(
+      commentAgg.map((row) => [String(row._id || ''), Number(row.comments || 0)])
+    );
+    const messageLikesGivenMap = new Map(
+      messageLikesGivenAgg.map((row) => [String(row._id || ''), Number(row.likesGiven || 0)])
+    );
+    const postLikesGivenMap = new Map(
+      postLikesGivenAgg.map((row) => [String(row._id || ''), Number(row.likesGiven || 0)])
+    );
+    const profileMap = new Map(profiles.map((item) => [String(item.userId || ''), item]));
+
+    const userIds = new Set([
+      ...messagesMap.keys(),
+      ...postsMap.keys(),
+      ...commentsMap.keys(),
+      ...messageLikesGivenMap.keys(),
+      ...postLikesGivenMap.keys(),
+      ...profileMap.keys(),
+    ].filter(Boolean));
+
+    let users = [];
+    const validUserIds = [...userIds].filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (validUserIds.length) {
+      users = await User.find({ _id: { $in: validUserIds }, role: { $ne: 'admin' } })
+        .select('_id name role organization avatarUrl hackerHandle createdAt')
+        .lean();
+    }
+
+    if (!users.length) {
+      users = await User.find({ role: { $ne: 'admin' } })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .select('_id name role organization avatarUrl hackerHandle createdAt')
+        .lean();
+    }
+
+    const leaderboard = users
+      .map((user) => {
+        const userId = String(user._id || '');
+        const messages = messagesMap.get(userId) || 0;
+        const posts = postsMap.get(userId) || 0;
+        const comments = commentsMap.get(userId) || 0;
+        const likesGiven =
+          (messageLikesGivenMap.get(userId) || 0) + (postLikesGivenMap.get(userId) || 0);
+        const profile = profileMap.get(userId);
+        const visitDates = Array.isArray(profile?.snapshot?.activity?.visitDates)
+          ? profile.snapshot.activity.visitDates
+          : [];
+        const visits = visitDates.length;
+        const streakDays = computeStreak(visitDates);
+        const totalXp =
+          Number(messages || 0) * 5 +
+          Number(posts || 0) * 8 +
+          Number(likesGiven || 0) * 2 +
+          Number(comments || 0) * 3 +
+          Number(visits || 0);
+
+        return {
+          id: userId,
+          name: user.name || 'Community Member',
+          handle: user.hackerHandle || '',
+          rank: resolveRank(totalXp),
+          totalXp,
+          streakDays,
+          avatarUrl: user.avatarUrl || '',
+        };
+      })
+      .sort((a, b) => {
+        if (b.totalXp !== a.totalXp) return b.totalXp - a.totalXp;
+        if (b.streakDays !== a.streakDays) return b.streakDays - a.streakDays;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, limit);
+
+    res.json({
+      leaderboard,
+      generatedAt: new Date().toISOString(),
+    });
   } catch (err) {
     next(err);
   }
