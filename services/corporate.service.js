@@ -1,4 +1,5 @@
 import { Asset, DashboardActivity, Notification, Pentest, PentestReport } from '../models/index.js';
+import { emitNotifications } from '../sockets/socket.store.js';
 
 const ACTIVE_STATUSES = new Set(['pending', 'in-progress', 'draft']);
 
@@ -68,7 +69,7 @@ export async function requestEngagement(user, payload = {}) {
 
   const admins = await Pentest.db.model('User').find({ role: 'admin' }).select('_id').lean();
   if (admins.length) {
-    await Notification.insertMany(
+    const inserted = await Notification.insertMany(
       admins.map((admin) => ({
         userId: admin._id,
         type: 'engagement',
@@ -77,6 +78,7 @@ export async function requestEngagement(user, payload = {}) {
         metadata: { pentestId: pentest._id.toString() },
       }))
     );
+    emitNotifications(inserted);
   }
 
   return {

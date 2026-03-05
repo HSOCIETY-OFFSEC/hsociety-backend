@@ -20,6 +20,8 @@ import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
 import { connectDB } from './db/index.js';
 import registerCommunitySocket from './sockets/community.socket.js';
+import registerNotificationsSocket from './sockets/notifications.socket.js';
+import { setSocketServer } from './sockets/socket.store.js';
 import authRoutes from './routes/auth.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import pentestRoutes from './routes/pentest.routes.js';
@@ -201,7 +203,9 @@ const io = new SocketIOServer(server, {
   }
 });
 
+setSocketServer(io);
 registerCommunitySocket(io);
+registerNotificationsSocket(io);
 
 // ============================================
 // Middleware

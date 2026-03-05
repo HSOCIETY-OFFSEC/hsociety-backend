@@ -3,6 +3,7 @@
  */
 import { Router } from 'express';
 import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Notification, Pentest, SecurityEvent, SiteContent, User } from '../models/index.js';
+import { emitNotifications } from '../sockets/socket.store.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
 import {
   approvePaidPentest,
@@ -420,7 +421,7 @@ router.post('/notifications/send', async (req, res, next) => {
       return res.json({ success: true, sentCount: 0 });
     }
 
-    await Notification.insertMany(
+    const inserted = await Notification.insertMany(
       users.map((user) => ({
         userId: user._id,
         type,
@@ -429,6 +430,7 @@ router.post('/notifications/send', async (req, res, next) => {
         metadata,
       }))
     );
+    emitNotifications(inserted);
 
     res.json({ success: true, sentCount: users.length });
   } catch (err) {
@@ -463,7 +465,7 @@ router.post('/bootcamp/meeting', async (req, res, next) => {
     const roles = resolveAudienceRoles(audience);
     const users = await User.find({ role: { $in: roles } }).select('_id').lean();
     if (users.length) {
-      await Notification.insertMany(
+      const inserted = await Notification.insertMany(
         users.map((user) => ({
           userId: user._id,
           type: 'bootcamp_meeting',
@@ -472,6 +474,7 @@ router.post('/bootcamp/meeting', async (req, res, next) => {
           metadata: { meetUrl, audience },
         }))
       );
+      emitNotifications(inserted);
     }
 
     res.json({ success: true, sentCount: users.length, meetUrl });
