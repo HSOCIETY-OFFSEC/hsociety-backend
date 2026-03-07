@@ -70,6 +70,8 @@ const resolveRank = (xp) => {
   return 'Candidate';
 };
 
+const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // GET /public/landing-stats
 router.get('/landing-stats', async (_req, res, next) => {
   try {
@@ -234,6 +236,136 @@ router.post('/security-events', optionalAuth, async (req, res, next) => {
     });
 
     res.status(201).json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /public/community-profiles/:handle
+router.get('/community-profiles/:handle', async (req, res, next) => {
+  try {
+    const raw = String(req.params.handle || '').trim().replace(/^@/, '');
+    const safeHandle = raw.replace(/[^a-z0-9._-]/gi, '');
+    if (!safeHandle) {
+      return res.status(400).json({ error: 'Handle is required' });
+    }
+
+    const handleRegex = new RegExp(`^${escapeRegExp(safeHandle)}$`, 'i');
+    const user = await User.findOne({ hackerHandle: handleRegex, role: { $ne: 'admin' } })
+      .select('_id name role organization avatarUrl hackerHandle bio createdAt')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ error: 'Profile not found' });
+    }
+
+    const userId = user._id;
+
+    const [
+      messageAgg,
+      commentAgg,
+      postAgg,
+      messageLikesGivenAgg,
+      postLikesGivenAgg,
+      profile
+    ] = await Promise.all([
+      CommunityMessage.aggregate([
+        { $match: { userId } },
+        {
+          $group: {
+            _id: '$userId',
+            messages: { $sum: 1 },
+            likesReceived: { $sum: '$likes' },
+            imagesShared: { $sum: { $cond: [{ $ne: ['$imageUrl', ''] }, 1, 0] } }
+          }
+        }
+      ]),
+      CommunityMessage.aggregate([
+        { $unwind: '$comments' },
+        { $match: { 'comments.userId': userId } },
+        {
+          $group: {
+            _id: '$comments.userId',
+            commentsMade: { $sum: 1 }
+          }
+        }
+      ]),
+      CommunityPost.aggregate([
+        { $match: { 'metadata.authorId': userId } },
+        {
+          $group: {
+            _id: '$metadata.authorId',
+            posts: { $sum: 1 }
+          }
+        }
+      ]),
+      CommunityMessage.aggregate([
+        { $unwind: '$likedBy' },
+        { $match: { likedBy: userId } },
+        {
+          $group: {
+            _id: '$likedBy',
+            likesGiven: { $sum: 1 }
+          }
+        }
+      ]),
+      CommunityPost.aggregate([
+        { $unwind: '$likedBy' },
+        { $match: { likedBy: userId } },
+        {
+          $group: {
+            _id: '$likedBy',
+            likesGiven: { $sum: 1 }
+          }
+        }
+      ]),
+      StudentProfile.findOne({ userId })
+        .select('userId snapshot.activity.visitDates')
+        .lean()
+    ]);
+
+    const stats = messageAgg[0] || { messages: 0, likesReceived: 0, imagesShared: 0 };
+    const commentsMade = commentAgg[0]?.commentsMade || 0;
+    const posts = postAgg[0]?.posts || 0;
+    const likesGiven =
+      (messageLikesGivenAgg[0]?.likesGiven || 0) + (postLikesGivenAgg[0]?.likesGiven || 0);
+    const visitDates = Array.isArray(profile?.snapshot?.activity?.visitDates)
+      ? profile.snapshot.activity.visitDates
+      : [];
+    const visits = visitDates.length;
+    const streakDays = computeStreak(visitDates);
+    const totalXp =
+      Number(stats.messages || 0) * 5 +
+      Number(posts || 0) * 8 +
+      Number(likesGiven || 0) * 2 +
+      Number(commentsMade || 0) * 3 +
+      Number(visits || 0);
+
+    return res.json({
+      profile: {
+        id: String(user._id),
+        name: user.name || 'Community Member',
+        role: user.role || 'member',
+        organization: user.organization || '',
+        avatarUrl: user.avatarUrl || '',
+        hackerHandle: user.hackerHandle || '',
+        bio: user.bio || '',
+      },
+      stats: {
+        messages: Number(stats.messages || 0),
+        likesReceived: Number(stats.likesReceived || 0),
+        commentsMade: Number(commentsMade || 0),
+        imagesShared: Number(stats.imagesShared || 0),
+        posts: Number(posts || 0),
+        likesGiven: Number(likesGiven || 0),
+      },
+      xpSummary: {
+        totalXp,
+        rank: resolveRank(totalXp),
+        streakDays,
+        visits,
+      }
+    });
   } catch (err) {
     next(err);
   }
