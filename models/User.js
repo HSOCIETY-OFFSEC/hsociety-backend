@@ -52,8 +52,12 @@ const userSchema = new mongoose.Schema(
     },
     bootcampStatus: {
       type: String,
-      enum: ['not_enrolled', 'enrolled', 'completed'],
+      enum: ['not_enrolled', 'enrolled', 'active', 'completed'],
       default: 'not_enrolled',
+    },
+    bootcampAccess: {
+      type: Boolean,
+      default: false,
     },
     bootcampPaymentStatus: {
       type: String,
@@ -82,6 +86,8 @@ const userSchema = new mongoose.Schema(
     mustChangePassword: { type: Boolean, default: false },
     // SECURITY UPDATE IMPLEMENTED: Mobile for OTP verification
     mobile: { type: String, trim: true, default: '' },
+    passwordResetTokenHash: { type: String, select: false, default: '' },
+    passwordResetExpiresAt: { type: Date, default: null },
   },
   {
     timestamps: true,
