@@ -2,6 +2,7 @@
  * Admin Routes
  */
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import { Audit, CommunityConfig, CommunityMessage, CommunityPost, Feedback, Notification, Pentest, SecurityEvent, SiteContent, User } from '../models/index.js';
 import { emitNotifications } from '../sockets/socket.store.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
@@ -25,6 +26,8 @@ const toUserResponse = (user) => ({
   organization: user.organization || '',
   bootcampStatus: user.bootcampStatus || 'not_enrolled',
   bootcampPaymentStatus: user.bootcampPaymentStatus || 'unpaid',
+  bootcampAccess: Boolean(user.bootcampAccess),
+  bootcampPaidAt: user.bootcampPaidAt || null,
   mutedUntil: user.mutedUntil || null,
   createdAt: user.createdAt,
 });
@@ -57,20 +60,19 @@ router.patch('/users/:id', async (req, res, next) => {
     if (req.body?.role && ['student', 'pentester', 'corporate', 'admin'].includes(req.body.role)) {
       updates.role = req.body.role;
     }
-    if (
-      req.body?.bootcampStatus &&
-      ['not_enrolled', 'enrolled', 'completed'].includes(req.body.bootcampStatus)
-    ) {
-      updates.bootcampStatus = req.body.bootcampStatus;
+    if (typeof req.body?.bootcampAccess === 'boolean') {
+      updates.bootcampAccess = req.body.bootcampAccess;
     }
-    if (
-      req.body?.bootcampPaymentStatus &&
-      ['unpaid', 'pending', 'paid'].includes(req.body.bootcampPaymentStatus)
-    ) {
-      updates.bootcampPaymentStatus = req.body.bootcampPaymentStatus;
-      if (req.body.bootcampPaymentStatus === 'paid') {
+    const bootcampStatus = String(req.body?.bootcampStatus || '').trim().toLowerCase();
+    if (['not_enrolled', 'enrolled', 'active', 'completed'].includes(bootcampStatus)) {
+      updates.bootcampStatus = bootcampStatus;
+    }
+    const paymentStatus = String(req.body?.bootcampPaymentStatus || '').trim().toLowerCase();
+    if (['unpaid', 'pending', 'paid'].includes(paymentStatus)) {
+      updates.bootcampPaymentStatus = paymentStatus;
+      if (paymentStatus === 'paid') {
         updates.bootcampPaidAt = new Date();
-      } else if (req.body.bootcampPaymentStatus === 'unpaid') {
+      } else if (paymentStatus === 'unpaid') {
         updates.bootcampPaidAt = null;
       }
     }
@@ -411,12 +413,21 @@ router.post('/notifications/send', async (req, res, next) => {
     const audience = String(req.body?.audience || 'all').trim().toLowerCase();
     const type = String(req.body?.type || 'admin_message').trim();
     const metadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
+    const rawUserIds = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
 
     if (!title) return res.status(400).json({ error: 'Title is required' });
     if (!message) return res.status(400).json({ error: 'Message is required' });
 
-    const roles = resolveAudienceRoles(audience);
-    const users = await User.find({ role: { $in: roles } }).select('_id').lean();
+    let users = [];
+    if (rawUserIds.length) {
+      const validIds = rawUserIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+      if (!validIds.length) return res.status(400).json({ error: 'No valid userIds provided' });
+      users = await User.find({ _id: { $in: validIds } }).select('_id').lean();
+    } else {
+      if (audience === 'custom') return res.status(400).json({ error: 'userIds are required for custom audience' });
+      const roles = resolveAudienceRoles(audience);
+      users = await User.find({ role: { $in: roles } }).select('_id').lean();
+    }
     if (!users.length) {
       return res.json({ success: true, sentCount: 0 });
     }

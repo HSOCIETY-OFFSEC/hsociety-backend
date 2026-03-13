@@ -332,6 +332,7 @@ router.get('/community-profiles/:handle', async (req, res, next) => {
     const visitDates = Array.isArray(profile?.snapshot?.activity?.visitDates)
       ? profile.snapshot.activity.visitDates
       : [];
+    const trimmedVisitDates = visitDates.slice(-120);
     const visits = visitDates.length;
     const streakDays = computeStreak(visitDates);
     const totalXp =
@@ -364,7 +365,10 @@ router.get('/community-profiles/:handle', async (req, res, next) => {
         rank: resolveRank(totalXp),
         streakDays,
         visits,
-      }
+      },
+      activity: {
+        visitDates: trimmedVisitDates,
+      },
     });
   } catch (err) {
     next(err);
