@@ -213,6 +213,9 @@ router.post('/subscribe', async (req, res, next) => {
 // POST /public/security-events
 router.post('/security-events', optionalAuth, async (req, res, next) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(202).json({ success: false, skipped: 'database_unavailable' });
+    }
     const eventType = String(req.body?.eventType || 'frontend_activity').trim().slice(0, 64);
     const action = String(req.body?.action || 'interaction').trim().slice(0, 128);
     const path = String(req.body?.path || '').trim().slice(0, 256);

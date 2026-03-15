@@ -3,15 +3,21 @@
  * Verify JWT from Authorization: Bearer <token>, set req.user (safe user object).
  */
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import User from '../models/User.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+
+const hasDatabaseConnection = () => mongoose.connection.readyState === 1;
 
 /**
  * Require valid JWT. Sets req.user = { id, email, name, role }.
  * Returns 401 if missing or invalid token.
  */
 export async function requireAuth(req, res, next) {
+  if (!hasDatabaseConnection()) {
+    return res.status(503).json({ error: 'Database unavailable. Please try again shortly.' });
+  }
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
@@ -86,6 +92,7 @@ export function requireRoles(...allowedRoles) {
  * Optional auth: set req.user if valid token present, otherwise leave req.user undefined.
  */
 export async function optionalAuth(req, res, next) {
+  if (!hasDatabaseConnection()) return next();
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
