@@ -8,6 +8,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import RefreshToken from '../models/RefreshToken.js';
+import Notification from '../models/Notification.js';
+import { emitNotification } from '../sockets/socket.store.js';
 import { validatePasswordStrength } from '../utils/security.js';
 
 // SECURITY UPDATE IMPLEMENTED: Salt rounds >= 12 for secure hashing
@@ -218,9 +220,28 @@ export async function login(email, password, meta = {}) {
     };
   }
 
+  const knownDevice = meta.userAgent
+    ? await RefreshToken.exists({ userId: user._id, userAgent: meta.userAgent })
+    : true;
+  const hadPreviousLogin = Boolean(user.lastLoginAt);
+
   const { accessToken, refreshToken, expiresIn } = await issueTokens(user._id, user.email, user.role, meta);
   user.lastLoginAt = new Date();
   await user.save({ validateBeforeSave: false });
+
+  if (hadPreviousLogin && !knownDevice) {
+    const notification = await Notification.create({
+      userId: user._id,
+      type: 'security',
+      title: 'New device login',
+      message: 'Your account signed in from a new device.',
+      metadata: {
+        ipAddress: meta.ipAddress || '',
+        userAgent: meta.userAgent || '',
+      },
+    });
+    emitNotification(notification);
+  }
   return {
     user: toUserResponse(user),
     token: accessToken,

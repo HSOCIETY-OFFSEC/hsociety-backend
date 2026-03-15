@@ -6,7 +6,9 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import CommunityMessage from '../models/CommunityMessage.js';
 import CommunityConfig from '../models/CommunityConfig.js';
+import Notification from '../models/Notification.js';
 import emojiRegex from 'emoji-regex';
+import { emitNotifications } from './socket.store.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const MAX_MESSAGE_LENGTH = 500;
@@ -49,6 +51,13 @@ const isValidImageUrl = (value) => {
 
 const DEFAULT_REACTIONS = ['🔥', '💯', '👏', '😂', '😮', '❤️', '✅', '⚡', '🧠', '🎯'];
 const DEFAULT_REACTION_LIMIT = 3;
+
+const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const extractMentions = (content = '') => {
+  const matches = String(content).match(/@([a-zA-Z0-9._-]{2,32})/g) || [];
+  return [...new Set(matches.map((item) => item.slice(1).toLowerCase()))];
+};
 
 const normalizeReactions = (reactions) => {
   if (!reactions) return {};
@@ -185,6 +194,31 @@ export const registerCommunitySocket = (io) => {
           imageUrl: hasImage ? imageUrl : ''
         });
 
+        const mentions = extractMentions(content);
+        if (mentions.length > 0) {
+          const mentionRegexes = mentions.map((handle) => new RegExp(`^${escapeRegExp(handle)}$`, 'i'));
+          const users = await User.find({ hackerHandle: { $in: mentionRegexes } })
+            .select('_id hackerHandle')
+            .lean();
+          const notifications = users
+            .filter((target) => target._id.toString() !== userId)
+            .map((target) => ({
+              userId: target._id,
+              type: 'mention',
+              title: 'You were mentioned',
+              message: `${socket.data.user.username} mentioned you in #${room}.`,
+              metadata: {
+                room,
+                messageId: messageDoc._id.toString(),
+                handle: target.hackerHandle || '',
+              },
+            }));
+          if (notifications.length > 0) {
+            const inserted = await Notification.insertMany(notifications);
+            emitNotifications(inserted);
+          }
+        }
+
         const payload = toMessagePayload(messageDoc.toObject());
         // Echo back the client-provided tempId (if any) so the sender can reconcile optimistic UI.
         if (data?.tempId) {
@@ -278,6 +312,21 @@ export const registerCommunitySocket = (io) => {
             createdAt: savedComment.createdAt
           }
         });
+
+        const ownerId = updated.userId?.toString();
+        if (ownerId && ownerId !== userId) {
+          const notification = await Notification.create({
+            userId: ownerId,
+            type: 'comment',
+            title: 'New comment',
+            message: `${socket.data.user?.username || 'Someone'} commented on your message.`,
+            metadata: {
+              room: updated.room,
+              messageId: updated._id.toString(),
+            },
+          });
+          emitNotifications([notification]);
+        }
       } catch (err) {
         console.error('[SOCKET] addComment error:', err);
       }
