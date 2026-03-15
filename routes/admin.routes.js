@@ -494,6 +494,37 @@ router.post('/bootcamp/meeting', async (req, res, next) => {
   }
 });
 
+// POST /admin/bootcamp/modules/release
+router.post('/bootcamp/modules/release', async (req, res, next) => {
+  try {
+    const moduleId = req.body?.moduleId;
+    const title = String(req.body?.title || 'New bootcamp module').trim();
+    const message = String(req.body?.message || 'A new bootcamp module has been released.').trim();
+    const audience = String(req.body?.audience || 'students').trim().toLowerCase();
+
+    const roles = resolveAudienceRoles(audience);
+    const users = await User.find({ role: { $in: roles } }).select('_id').lean();
+    if (!users.length) {
+      return res.json({ success: true, sentCount: 0 });
+    }
+
+    const inserted = await Notification.insertMany(
+      users.map((user) => ({
+        userId: user._id,
+        type: 'module_released',
+        title,
+        message,
+        metadata: { moduleId, title },
+      }))
+    );
+    emitNotifications(inserted);
+
+    res.json({ success: true, sentCount: users.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PATCH /admin/community/posts/:id
 router.patch('/community/posts/:id', async (req, res, next) => {
   try {

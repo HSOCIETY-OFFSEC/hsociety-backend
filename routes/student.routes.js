@@ -14,8 +14,10 @@ import {
   SiteContent,
   User,
   BootcampPayment,
+  Notification,
 } from '../models/index.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
+import { emitNotifications } from '../sockets/socket.store.js';
 import {
   completeModule,
   deployProfessional,
@@ -140,6 +142,10 @@ router.use((req, res, next) => {
 const BOOTCAMP_PRICE_GHS = Number(process.env.BOOTCAMP_PRICE_GHS || 150);
 const BOOTCAMP_CURRENCY = process.env.BOOTCAMP_CURRENCY || 'GHS';
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || '';
+const XP_RULES = {
+  room: 100,
+  ctf: 250,
+};
 
 const getFrontendBaseUrl = () => {
   const base = process.env.FRONTEND_URL
@@ -206,7 +212,25 @@ const resolveRank = (xp) => {
   return 'Candidate';
 };
 
-const buildXpSummary = async (userId, visitDates = []) => {
+const computeLearningXp = (course, progressState) => {
+  if (!course || !progressState) return 0;
+  let xp = 0;
+  const modules = Array.isArray(course.modules) ? course.modules : [];
+  modules.forEach((module) => {
+    const moduleProgress = progressState.modules?.[module.moduleId] || { rooms: {}, ctfCompleted: false };
+    (module.rooms || []).forEach((room) => {
+      if (moduleProgress.rooms?.[room.roomId]) {
+        xp += XP_RULES.room;
+      }
+    });
+    if (moduleProgress.ctfCompleted) {
+      xp += XP_RULES.ctf;
+    }
+  });
+  return xp;
+};
+
+const buildXpSummary = async (userId, visitDates = [], learningXp = 0) => {
   const [messagesCount, postsCount, messageLikesGiven, postLikesGiven, commentCount] = await Promise.all([
     CommunityMessage.countDocuments({ userId }),
     CommunityPost.countDocuments({ 'metadata.authorId': String(userId) }),
@@ -219,26 +243,80 @@ const buildXpSummary = async (userId, visitDates = []) => {
   const visits = Array.isArray(visitDates) ? visitDates.length : 0;
   const streakDays = computeStreak(visitDates);
 
-  const totalXp =
+  const communityXp =
     Number(messagesCount || 0) * 5 +
     Number(postsCount || 0) * 8 +
     likesGiven * 2 +
     Number(commentCount || 0) * 3 +
     visits;
+  const totalXp = communityXp + Number(learningXp || 0);
 
   return {
     totalXp,
     rank: resolveRank(totalXp),
     streakDays,
     visits,
+    learningXp: Number(learningXp || 0),
     breakdown: {
       messages: Number(messagesCount || 0),
       posts: Number(postsCount || 0),
       likesGiven,
       comments: Number(commentCount || 0),
       visits,
+      learningXp: Number(learningXp || 0),
+      communityXp,
     },
   };
+};
+
+const notifyXpAndRankIfChanged = async (userId, nextSummary, snapshot) => {
+  const previous = snapshot?.stats?.xpSummary || null;
+  const notifications = [];
+
+  if (previous && Number(nextSummary.totalXp) > Number(previous.totalXp || 0)) {
+    const delta = Number(nextSummary.totalXp) - Number(previous.totalXp || 0);
+    notifications.push({
+      userId,
+      type: 'xp_earned',
+      title: 'XP earned',
+      message: `You earned ${delta} XP. Total XP is now ${nextSummary.totalXp}.`,
+      metadata: { delta, totalXp: nextSummary.totalXp },
+    });
+  }
+
+  if (previous && previous.rank && nextSummary.rank && previous.rank !== nextSummary.rank) {
+    notifications.push({
+      userId,
+      type: 'rank_change',
+      title: 'Rank updated',
+      message: `Your rank changed from ${previous.rank} to ${nextSummary.rank}.`,
+      metadata: { previousRank: previous.rank, rank: nextSummary.rank, totalXp: nextSummary.totalXp },
+    });
+  }
+
+  const updatedSnapshot = {
+    ...(snapshot || {}),
+    stats: {
+      ...(snapshot?.stats || {}),
+      xpSummary: {
+        ...nextSummary,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  };
+
+  await StudentProfile.findOneAndUpdate(
+    { userId },
+    { $set: { snapshot: updatedSnapshot } },
+    { upsert: true, new: true }
+  );
+
+  if (notifications.length > 0) {
+    const inserted = await Notification.insertMany(notifications);
+    emitNotifications(inserted);
+  }
+
+  return updatedSnapshot;
 };
 
 const upsertVisitAndGetSummary = async (userId) => {
@@ -262,13 +340,12 @@ const upsertVisitAndGetSummary = async (userId) => {
     },
   };
 
-  await StudentProfile.findOneAndUpdate(
-    { userId },
-    { $set: { snapshot: updatedSnapshot } },
-    { upsert: true, new: true }
-  );
-
-  return buildXpSummary(userId, trimmedVisitDates);
+  const progressState = getProgressState(updatedSnapshot);
+  const course = await ensureCourse();
+  const learningXp = computeLearningXp(course.course || course, progressState);
+  const xpSummary = await buildXpSummary(userId, trimmedVisitDates, learningXp);
+  await notifyXpAndRankIfChanged(userId, xpSummary, updatedSnapshot);
+  return xpSummary;
 };
 
 const requireBootcampRegistration = async (req, res, next) => {
@@ -349,6 +426,27 @@ const getProgressState = (profileSnapshot) => {
   const progress = profileSnapshot?.progressState;
   if (progress && typeof progress === 'object') return progress;
   return emptyProgressState;
+};
+
+const updateProgressSnapshot = async (userId, updater) => {
+  const profile = await StudentProfile.findOne({ userId });
+  const snapshot = profile?.snapshot && typeof profile.snapshot === 'object' ? profile.snapshot : {};
+  const progressState = getProgressState(snapshot);
+  const nextProgressState = updater(progressState);
+  const nextSnapshot = {
+    ...snapshot,
+    progressState: nextProgressState,
+    progressUpdatedAt: new Date().toISOString(),
+  };
+  const course = await ensureCourse();
+  const learningXp = computeLearningXp(course.course || course, nextProgressState);
+  const xpSummary = await buildXpSummary(
+    userId,
+    nextSnapshot?.activity?.visitDates || [],
+    learningXp
+  );
+  await notifyXpAndRankIfChanged(userId, xpSummary, nextSnapshot);
+  return { nextSnapshot, nextProgressState, xpSummary };
 };
 
 const computeModuleProgress = (module, progressState) => {
@@ -476,7 +574,7 @@ router.get('/overview', async (req, res, next) => {
   }
 });
 
-router.get('/learning-path', requireBootcampRegistration, async (req, res, next) => {
+router.get('/learning-path', requireBootcampAccess, async (req, res, next) => {
   try {
     const course = await ensureCourse();
     const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
@@ -636,6 +734,23 @@ router.get('/bootcamp/payments/verify', async (req, res, next) => {
         user.bootcampStatus = 'enrolled';
       }
       await user.save({ validateBeforeSave: false });
+      const notice = await Notification.create({
+        userId: user._id,
+        type: 'payment_confirmed',
+        title: 'Payment confirmed',
+        message: 'Your bootcamp payment was successfully verified. Access unlocked.',
+        metadata: { reference, amount: BOOTCAMP_PRICE_GHS, currency: BOOTCAMP_CURRENCY },
+      });
+      emitNotifications([notice]);
+    } else {
+      const notice = await Notification.create({
+        userId: user._id,
+        type: 'payment_failed',
+        title: 'Payment verification failed',
+        message: 'We could not verify your bootcamp payment. Please retry or contact support.',
+        metadata: { reference, amount: BOOTCAMP_PRICE_GHS, currency: BOOTCAMP_CURRENCY },
+      });
+      emitNotifications([notice]);
     }
 
     res.json({
@@ -686,7 +801,7 @@ router.post('/bootcamp/payments/btc', async (req, res, next) => {
 });
 
 // GET /student/course
-router.get('/course', requireBootcampRegistration, async (_req, res, next) => {
+router.get('/course', requireBootcampAccess, async (_req, res, next) => {
   try {
     const course = await ensureCourse();
     res.json(course.course || course);
@@ -696,7 +811,7 @@ router.get('/course', requireBootcampRegistration, async (_req, res, next) => {
 });
 
 // GET /student/courses
-router.get('/courses', requireBootcampRegistration, async (_req, res, next) => {
+router.get('/courses', requireBootcampAccess, async (_req, res, next) => {
   try {
     const course = await ensureCourse();
     res.json([course.course || course]);
@@ -706,7 +821,7 @@ router.get('/courses', requireBootcampRegistration, async (_req, res, next) => {
 });
 
 // GET /student/course/progress
-router.get('/course/progress', requireBootcampRegistration, async (req, res, next) => {
+router.get('/course/progress', requireBootcampAccess, async (req, res, next) => {
   try {
     const course = await ensureCourse();
     const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
@@ -749,7 +864,10 @@ router.get('/xp-summary', async (req, res, next) => {
   try {
     const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
     const visitDates = profile?.snapshot?.activity?.visitDates || [];
-    const xpSummary = await buildXpSummary(req.user.id, visitDates);
+    const progressState = getProgressState(profile?.snapshot);
+    const course = await ensureCourse();
+    const learningXp = computeLearningXp(course.course || course, progressState);
+    const xpSummary = await buildXpSummary(req.user.id, visitDates, learningXp);
     res.json(xpSummary);
   } catch (err) {
     next(err);
@@ -757,18 +875,9 @@ router.get('/xp-summary', async (req, res, next) => {
 });
 
 // POST /student/profile
-router.post('/profile', async (req, res, next) => {
-  try {
-    const snapshot = req.body || {};
-    const doc = await StudentProfile.findOneAndUpdate(
-      { userId: req.user.id },
-      { $set: { snapshot } },
-      { upsert: true, new: true }
-    ).lean();
-    res.json({ success: true, data: doc.snapshot || snapshot });
-  } catch (err) {
-    next(err);
-  }
+// Direct snapshot updates are disabled for security. Use specific progress endpoints instead.
+router.post('/profile', async (_req, res) => {
+  res.status(405).json({ error: 'Direct profile updates are not allowed.' });
 });
 
 // POST /student/quiz
@@ -782,22 +891,64 @@ router.post('/quiz', requireBootcampAccess, async (req, res, next) => {
         const created = await Quiz.create(buildDefaultQuiz(scope));
         quiz = created.toObject();
       }
+      const scopeKey = `${scope.type}:${scope.id}:${scope.courseId || ''}`;
+      const existingNotice = await Notification.findOne({
+        userId: req.user.id,
+        type: 'quiz_available',
+        'metadata.scopeKey': scopeKey,
+      }).lean();
+      if (!existingNotice) {
+        const notice = await Notification.create({
+          userId: req.user.id,
+          type: 'quiz_available',
+          title: 'Quiz available',
+          message: 'A new quiz is ready for you.',
+          metadata: {
+            scope,
+            scopeKey,
+          },
+        });
+        emitNotifications([notice]);
+      }
       return res.json(quiz);
     }
 
-    if (payload.scope && typeof payload.score === 'number') {
-      const total = Number(payload.total || 0);
-      const correct = Number(payload.correct || 0);
-      const score = Number(payload.score || 0);
+    if (payload.scope && payload.answers && typeof payload.answers === 'object') {
+      const scope = payload.scope || {};
+      const quiz = await Quiz.findOne({
+        'scope.type': scope.type,
+        'scope.id': scope.id,
+        'scope.courseId': scope.courseId || '',
+      }).lean();
+      if (!quiz) {
+        return res.status(404).json({ error: 'Quiz not found' });
+      }
+      const answers = payload.answers || {};
+      const total = Array.isArray(quiz.questions) ? quiz.questions.length : 0;
+      const correct = Array.isArray(quiz.questions)
+        ? quiz.questions.reduce((acc, q) => {
+            const answerIndex = answers[q.id];
+            return acc + (answerIndex === q.correctIndex ? 1 : 0);
+          }, 0)
+        : 0;
+      const score = total ? Math.round((correct / total) * 100) : 0;
       const passed = score >= 70;
       await QuizSubmission.create({
         userId: req.user.id,
-        scope: payload.scope,
+        scope,
         score,
         total,
         correct,
         passed,
       });
+      const resultNotice = await Notification.create({
+        userId: req.user.id,
+        type: 'quiz_result',
+        title: 'Quiz result available',
+        message: passed ? 'You passed the quiz.' : 'Quiz completed. Review your answers.',
+        metadata: { scope, score, total, correct, passed },
+      });
+      emitNotifications([resultNotice]);
       return res.json({
         score,
         total,
@@ -825,8 +976,134 @@ router.post('/enroll-training', requireBootcampAccess, async (req, res, next) =>
 // POST /student/modules/:moduleId/complete
 router.post('/modules/:moduleId/complete', requireBootcampAccess, async (req, res, next) => {
   try {
+    const course = await ensureCourse();
+    const modules = course.course?.modules || course.modules || [];
+    const moduleId = Number(req.params.moduleId);
+    const module = modules.find((m) => Number(m.moduleId) === moduleId);
+    if (!module) return res.status(404).json({ error: 'Module not found' });
+
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const progressState = getProgressState(profile?.snapshot);
+    const moduleProgress = progressState.modules?.[moduleId] || { rooms: {}, ctfCompleted: false };
+    const allRoomsCompleted =
+      module.rooms.length > 0 &&
+      module.rooms.every((room) => moduleProgress.rooms?.[room.roomId]);
+    if (!allRoomsCompleted || !moduleProgress.ctfCompleted) {
+      return res.status(400).json({ error: 'Complete all rooms and CTF before finishing module.' });
+    }
+
     const result = await completeModule(req.user.id, req.params.moduleId);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/modules/:moduleId/rooms/:roomId/complete
+router.post('/modules/:moduleId/rooms/:roomId/complete', requireBootcampAccess, async (req, res, next) => {
+  try {
+    const course = await ensureCourse();
+    const modules = course.course?.modules || course.modules || [];
+    const moduleId = Number(req.params.moduleId);
+    const roomId = Number(req.params.roomId);
+    const module = modules.find((m) => Number(m.moduleId) === moduleId);
+    if (!module) return res.status(404).json({ error: 'Module not found' });
+    const room = (module.rooms || []).find((r) => Number(r.roomId) === roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+
+    const { nextProgressState, xpSummary } = await updateProgressSnapshot(req.user.id, (progressState) => {
+      const moduleProgress = progressState.modules?.[moduleId] || { rooms: {}, ctfCompleted: false };
+      return {
+        ...progressState,
+        modules: {
+          ...progressState.modules,
+          [moduleId]: {
+            ...moduleProgress,
+            rooms: {
+              ...moduleProgress.rooms,
+              [roomId]: true,
+            },
+          },
+        },
+      };
+    });
+
+    res.json({ success: true, progressState: nextProgressState, xpSummary });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/modules/:moduleId/ctf/complete
+router.post('/modules/:moduleId/ctf/complete', requireBootcampAccess, async (req, res, next) => {
+  try {
+    const course = await ensureCourse();
+    const modules = course.course?.modules || course.modules || [];
+    const moduleId = Number(req.params.moduleId);
+    const module = modules.find((m) => Number(m.moduleId) === moduleId);
+    if (!module) return res.status(404).json({ error: 'Module not found' });
+
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const progressState = getProgressState(profile?.snapshot);
+    const moduleProgress = progressState.modules?.[moduleId] || { rooms: {}, ctfCompleted: false };
+    const allRoomsCompleted =
+      module.rooms.length > 0 &&
+      module.rooms.every((room) => moduleProgress.rooms?.[room.roomId]);
+    if (!allRoomsCompleted) {
+      return res.status(400).json({ error: 'Complete all rooms before finishing the CTF.' });
+    }
+
+    const { nextProgressState, xpSummary } = await updateProgressSnapshot(req.user.id, (state) => ({
+      ...state,
+      modules: {
+        ...state.modules,
+        [moduleId]: {
+          ...(state.modules?.[moduleId] || { rooms: {}, ctfCompleted: false }),
+          ctfCompleted: true,
+        },
+      },
+    }));
+
+    res.json({ success: true, progressState: nextProgressState, xpSummary });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /student/ctf/:ctfId/complete
+router.post('/ctf/:ctfId/complete', requireBootcampAccess, async (req, res, next) => {
+  try {
+    const ctfId = String(req.params.ctfId || '').trim();
+    const course = await ensureCourse();
+    const modules = course.course?.modules || course.modules || [];
+    const module = modules.find((m) =>
+      String(m.ctf || '').toLowerCase() === ctfId.toLowerCase() ||
+      String(m.moduleId) === ctfId
+    );
+    if (!module) return res.status(404).json({ error: 'CTF not found' });
+
+    const profile = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    const progressState = getProgressState(profile?.snapshot);
+    const moduleProgress = progressState.modules?.[module.moduleId] || { rooms: {}, ctfCompleted: false };
+    const allRoomsCompleted =
+      module.rooms.length > 0 &&
+      module.rooms.every((room) => moduleProgress.rooms?.[room.roomId]);
+    if (!allRoomsCompleted) {
+      return res.status(400).json({ error: 'Complete all rooms before finishing the CTF.' });
+    }
+
+    const { nextProgressState, xpSummary } = await updateProgressSnapshot(req.user.id, (state) => ({
+      ...state,
+      modules: {
+        ...state.modules,
+        [module.moduleId]: {
+          ...(state.modules?.[module.moduleId] || { rooms: {}, ctfCompleted: false }),
+          ctfCompleted: true,
+        },
+      },
+    }));
+
+    res.json({ success: true, progressState: nextProgressState, xpSummary });
   } catch (err) {
     next(err);
   }

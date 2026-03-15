@@ -1,6 +1,8 @@
-import { Audit, CaseStudy, Feedback, Pentest, User } from '../models/index.js';
+import { Audit, CaseStudy, Feedback, Notification, Pentest, User } from '../models/index.js';
+import { emitNotifications } from '../sockets/socket.store.js';
 
 export async function assignEngagement(pentestId, assignedTo) {
+  const previous = await Pentest.findById(pentestId).select('assignedTo title requestedBy').lean();
   const updates = {
     assignedTo: assignedTo || null,
     status: assignedTo ? 'in-progress' : 'pending',
@@ -12,6 +14,16 @@ export async function assignEngagement(pentestId, assignedTo) {
     { $set: updates },
     { new: true }
   ).lean();
+  if (doc && assignedTo && (!previous?.assignedTo || String(previous.assignedTo) !== String(assignedTo))) {
+    const notice = await Notification.create({
+      userId: assignedTo,
+      type: 'engagement_assignment',
+      title: 'New engagement assigned',
+      message: `You have been assigned to ${doc.title || 'a new engagement'}.`,
+      metadata: { pentestId: doc._id.toString() },
+    });
+    emitNotifications([notice]);
+  }
   return doc;
 }
 
